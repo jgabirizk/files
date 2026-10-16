@@ -168,7 +168,7 @@ export default function AdsGenerator() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [progress, setProgress] = useState(1)
   const [zoom, setZoom] = useState(100)
-  const [activeTab, setActiveTab] = useState<"assets" | "copy" | "shadow">("assets")
+  const [activeTab, setActiveTab] = useState<"assets" | "copy" | "shadow" | "export">("assets")
   const [shadows, setShadows] = useState<Record<AdSize, ShadowConfig>>({
     "300x250": { ...DEFAULT_SHADOW },
     "160x600": { ...DEFAULT_SHADOW },
@@ -1723,6 +1723,7 @@ export default function AdsGenerator() {
             { id: "assets", icon: ImageIcon, label: "Assets" },
             { id: "copy", icon: Type, label: "Copy" },
             { id: "shadow", icon: Layers, label: "Shadow" },
+            { id: "export", icon: Download, label: "Export" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1917,41 +1918,6 @@ export default function AdsGenerator() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-2">Click URL</label>
-                <input
-                  type="url"
-                  value={clickUrl}
-  onChange={(e) => setClickUrl(e.target.value)}
-  placeholder="Leave empty for an ad-server exit tag"
-  className="w-full bg-sidebar-border border-0 rounded-lg px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-primary"
-  />
-  <p className="mt-1.5 text-[11px] leading-relaxed text-gray-400">
-  {clickUrl.trim()
-  ? "Exported as the clickTag default. An ad server can still override it."
-  : <>Exported as an exit tag <code className="font-mono text-gray-300">{'clickTag = ""'}</code>. Every click still fires it; the ad server fills in the URL.</>}
-  </p>
-  </div>
-
-              {exportReport && (
-                <div>
-                  <label className="block text-[11px] text-gray-400 mb-2">Last export · limit 150 KB per zip</label>
-                  <ul className="flex flex-col gap-1">
-                    {exportReport.map((r) => (
-                      <li key={r.size} className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="font-mono text-gray-300">{r.size}</span>
-                        <span className="text-gray-400">
-                          {r.dpi ? `${r.dpi} dpi · q${Math.round((r.quality ?? 0) * 100)}` : "no image"}
-                        </span>
-                        <span className={`font-mono tabular-nums ${r.fits ? "text-gray-300" : "text-primary"}`}>
-                          {(r.zipBytes / 1000).toFixed(1)} KB{r.fits ? "" : " over"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
                 </div>
               )}
             </div>
@@ -2316,9 +2282,124 @@ export default function AdsGenerator() {
             </div>
             )
           })()}
+
+          {activeTab === "export" && (
+            <div className="flex flex-col gap-5">
+              <div role="group" aria-labelledby="export-sizes-label" className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span id="export-sizes-label" className="text-[11px] text-gray-400">Sizes to export</span>
+                  <button
+                    type="button"
+                    onClick={() => setExportSizes(orderedExportSizes.length === ALL_SIZES.length ? [] : ALL_SIZES)}
+                    className="text-[11px] text-gray-400 hover:text-white underline-offset-2 hover:underline"
+                  >
+                    {orderedExportSizes.length === ALL_SIZES.length ? "Clear" : "Select all"}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SIZES.map((s) => {
+                    const on = exportSizes.includes(s)
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => toggleExportSize(s)}
+                        className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-colors ${
+                          on ? "bg-foreground text-background border-foreground" : "bg-transparent text-gray-400 border-sidebar-border hover:text-white"
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="click-url" className="block text-[11px] text-gray-400 mb-2">Click URL</label>
+                <input
+                  id="click-url"
+                  type="url"
+                  value={clickUrl}
+                  onChange={(e) => setClickUrl(e.target.value)}
+                  placeholder="Leave empty for an ad-server exit tag"
+                  className="w-full bg-sidebar-border border-0 rounded-lg px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-400">
+                  {clickUrl.trim()
+                    ? "Exported as the clickTag default. An ad server can still override it."
+                    : <>Exported as an exit tag <code className="font-mono text-gray-300">{'clickTag = ""'}</code>. Every click still fires it; the ad server fills in the URL.</>}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  disabled={orderedExportSizes.length === 0}
+                  className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white py-2 px-4 rounded-lg text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={orderedExportSizes.length === 0 ? "Pick at least one size to export" : undefined}
+                >
+                  <Download className="w-4 h-4" />
+                  {`Export ${exportCountLabel}`}
+                </button>
+                <button
+                  onClick={handleExportGifs}
+                  disabled={!!gifStatus?.busy || orderedExportSizes.length === 0}
+                  className="w-full flex items-center justify-center gap-2 bg-muted hover:bg-muted/80 text-foreground py-2 px-4 rounded-lg text-[13px] font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  title={orderedExportSizes.length === 0 ? "Pick at least one size to export" : `Export ${exportCountLabel} as full-quality GIF previews for PowerPoint`}
+                >
+                  <Film className="w-4 h-4" />
+                  {`GIF previews · ${exportCountLabel}`}
+                </button>
+                {orderedExportSizes.length === 0 && (
+                  <p className="text-[11px] text-gray-400">Pick at least one size to export.</p>
+                )}
+                {gifStatus && (
+                  <p role="status" className={`text-[11px] leading-relaxed ${gifStatus.busy ? "text-gray-400" : "text-primary"}`}>
+                    {gifStatus.text}
+                  </p>
+                )}
+              </div>
+
+              {exportReport && (
+                <div>
+                  <p className="text-[11px] text-gray-400 mb-2">Last export · limit 150 KB per zip</p>
+                  <ul className="flex flex-col gap-1">
+                    {exportReport.map((r) => (
+                      <li key={r.size} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-mono text-gray-300">{r.size}</span>
+                        <span className="text-gray-400">
+                          {r.dpi ? `${r.dpi} dpi · q${Math.round((r.quality ?? 0) * 100)}` : "no image"}
+                        </span>
+                        <span className={`font-mono tabular-nums ${r.fits ? "text-gray-300" : "text-primary"}`}>
+                          {(r.zipBytes / 1000).toFixed(1)} KB{r.fits ? "" : " over"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {gifReport && (
+                <div>
+                  <p className="text-[11px] text-gray-400 mb-2">Last GIF export · plays once, rests on the end frame · full quality, for PowerPoint previews</p>
+                  <ul className="flex flex-col gap-1">
+                    {gifReport.map((r) => (
+                      <li key={r.size} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-mono text-gray-300">{r.size}</span>
+                        <span className="text-gray-400">{r.fps} fps · {r.colors} colours</span>
+                        <span className="font-mono tabular-nums text-gray-300">{(r.bytes / 1000).toFixed(1)} KB</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Export + Reset */}
+        {/* Project + Reset */}
         <div className="p-4 border-t border-sidebar-border flex flex-col gap-2">
           <div className="flex gap-2">
             <button
@@ -2345,6 +2426,14 @@ export default function AdsGenerator() {
               aria-label="Open project file"
               onChange={handleOpenProject}
             />
+            <button
+              onClick={handleReset}
+              className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground rounded-lg transition-colors"
+              title="Reset to defaults"
+              aria-label="Reset to defaults"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
           </div>
           {projectNotice && (
             <p
@@ -2353,82 +2442,6 @@ export default function AdsGenerator() {
             >
               {projectNotice.text}
             </p>
-          )}
-          <div role="group" aria-labelledby="export-sizes-label" className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between">
-              <span id="export-sizes-label" className="text-[11px] text-muted-foreground">Sizes to export</span>
-              <button
-                type="button"
-                onClick={() => setExportSizes(orderedExportSizes.length === ALL_SIZES.length ? [] : ALL_SIZES)}
-                className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-              >
-                {orderedExportSizes.length === ALL_SIZES.length ? "Clear" : "Select all"}
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {ALL_SIZES.map((s) => {
-                const on = exportSizes.includes(s)
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => toggleExportSize(s)}
-                    className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-colors ${
-                      on ? "bg-foreground text-background border-foreground" : "bg-transparent text-muted-foreground border-border hover:text-foreground"
-                    }`}
-                  >
-                    {s}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowExportModal(true)}
-              disabled={orderedExportSizes.length === 0}
-              className="flex-1 flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white py-2 px-4 rounded-lg text-[13px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              title={orderedExportSizes.length === 0 ? "Pick at least one size to export" : undefined}
-            >
-              <Download className="w-4 h-4" />
-              {`Export ${exportCountLabel}`}
-            </button>
-            <button
-              onClick={handleExportGifs}
-              disabled={!!gifStatus?.busy || orderedExportSizes.length === 0}
-              className="flex items-center justify-center gap-2 bg-muted hover:bg-muted/80 text-foreground py-2 px-3 rounded-lg text-[13px] font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              title={orderedExportSizes.length === 0 ? "Pick at least one size to export" : `Export ${exportCountLabel} as full-quality GIF previews for PowerPoint`}
-            >
-              <Film className="w-4 h-4" />
-              GIF
-            </button>
-            <button
-              onClick={handleReset}
-              className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground rounded-lg transition-colors"
-              title="Reset to defaults"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-          </div>
-          {gifStatus && (
-            <p role="status" className={`text-[11px] leading-relaxed ${gifStatus.busy ? "text-gray-400" : "text-primary"}`}>
-              {gifStatus.text}
-            </p>
-          )}
-          {gifReport && (
-            <div>
-              <p className="text-[11px] text-gray-400 mb-1">Last GIF export · plays once, rests on the end frame · full quality, for PowerPoint previews</p>
-              <ul className="flex flex-col gap-1">
-                {gifReport.map((r) => (
-                  <li key={r.size} className="flex items-center justify-between gap-2 text-[11px]">
-                    <span className="font-mono text-gray-300">{r.size}</span>
-                    <span className="text-gray-400">{r.fps} fps · {r.colors} colours</span>
-                    <span className="font-mono tabular-nums text-gray-300">{(r.bytes / 1000).toFixed(1)} KB</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
           )}
         </div>
       </div>
@@ -2448,7 +2461,7 @@ export default function AdsGenerator() {
             {/* Header */}
             <div>
               <p className="text-[15px] text-foreground" style={{ fontWeight: 500 }}>Export ads</p>
-              <p className="text-[13px] text-muted-foreground mt-0.5">Choose image quality before exporting all 5 sizes.</p>
+              <p className="text-[13px] text-muted-foreground mt-0.5">{`Choose image quality before exporting ${exportCountLabel}.`}</p>
             </div>
 
             {/* Quality Slider */}
