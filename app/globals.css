@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* Custom fonts for ads */
+@font-face {
+  font-family: "Graphik";
+  src: url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Graphik-Semibold-Web-aoDAAy9H6Ji8C7ggXWTgROZqU1Dkmx.woff") format("woff"),
+       url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Graphik-Semibold-Web-Jo084Ebbr8bTLJBcPVVu95sRm2THg6.woff2") format("woff2");
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: "Graphik";
+  src: url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Graphik-Medium-Web-iBsxe0HGI9dkoftDFZeZqLIRG3SHQ6.woff") format("woff"),
+       url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Graphik-Medium-Web-S1NDZHorwBzkKoIz6kowYSeJZsq6u4.woff2") format("woff2");
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: "Reckless Neue";
+  src: url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/RecklessNeue-Medium-iX22qk4JAgjZIbkzg9vqoMl5geWyDT.ttf") format("truetype");
+  font-weight: 500;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-background: #f5f6f8;
+  --color-foreground: #111827;
+  --color-card: #ffffff;
+  --color-card-foreground: #111827;
+  --color-primary: #CC0000;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f0f0;
+  --color-secondary-foreground: #111827;
+  --color-muted: #f8f9fb;
+  --color-muted-foreground: #6b7280;
+  --color-border: #e4e7ed;
+  --color-sidebar: #0f1117;
+  --color-sidebar-foreground: #ffffff;
+  --color-sidebar-border: #374151;
+  --radius: 10px;
+}
+
+html {
+  background-color: var(--color-background);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
