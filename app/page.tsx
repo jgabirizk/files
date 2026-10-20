@@ -1048,23 +1048,41 @@ export default function AdsGenerator() {
         titleLines.forEach((line, i) => drawCopyLine("title", titleLines, i, line, textX + tdx728, titleY + i * (titleSize + 2)))
       } else {
         // --- 728x90 STANDARD LAYOUT ---
-        // Title with wrap
+        // Measured before drawing so the headline + subtitle block can be
+        // centred above the red bar, matching the two-frame and eyebrow layouts.
         const titleSize = Math.round(height * 0.26 * FS.title)
+        const subtitleSize = Math.round(height * 0.21 * FS.subtitle)
+        ctx.font = `500 ${subtitleSize}px "Reckless Neue", serif`
+        const subtitleLines = wrapText(activeSubtitle, maxTextWidth, "subtitle")
+        const subtitleCount = subtitleLines.filter((l) => l.trim()).length
         ctx.font = `600 ${titleSize}px Graphik, sans-serif`
+        const titleLines = wrapText(activeTitle, maxTextWidth)
+        // Centre the visible type (cap height of the first line to the
+        // baseline of the last), not the font boxes: those carry leading above
+        // the caps, so box-centring sits the copy visibly low.
+        const capBox = (font: string): [number, number] => {
+          ctx.font = font
+          const m = ctx.measureText("H")
+          return [-m.actualBoundingBoxAscent, m.actualBoundingBoxDescent]
+        }
+        const [titleCapTop, titleBase] = capBox(`600 ${titleSize}px Graphik, sans-serif`)
+        const [, subtitleBase] = capBox(`500 ${subtitleSize}px "Reckless Neue", serif`)
+        const titleBlockH = titleLines.length * (titleSize + 2)
+        const inkBottom = subtitleCount
+          ? titleBlockH + 4 + (subtitleCount - 1) * (subtitleSize + 2) + subtitleBase
+          : (titleLines.length - 1) * (titleSize + 2) + titleBase
+        const blockTop = Math.max(0, (height - redBarHeight - (inkBottom - titleCapTop)) / 2 - titleCapTop)
+
         ctx.fillStyle = txt(titleProgress)
         const [stdTdx, stdTdy] = textSlide(titleProgress)
-        const titleY = padding + stdTdy
-        const titleLines = wrapText(activeTitle, maxTextWidth)
+        const titleY = blockTop + stdTdy
         titleLines.forEach((line, i) => drawCopyLine("title", titleLines, i, line, textX + stdTdx, titleY + i * (titleSize + 2)))
         const titleBottom = titleY + titleLines.length * (titleSize + 2)
 
-        // Subtitle with wrap
-        const subtitleSize = Math.round(height * 0.21 * FS.subtitle)
         ctx.font = `500 ${subtitleSize}px "Reckless Neue", serif`
         ctx.fillStyle = txt(subtitleProgress)
         const [stdSdx, stdSdy] = textSlide(subtitleProgress)
         const subtitleY = titleBottom + 4 + stdSdy
-        const subtitleLines = wrapText(activeSubtitle, maxTextWidth, "subtitle")
         subtitleLines.forEach((line, i) => drawCopyLine("subtitle", subtitleLines, i, line, textX + stdSdx, subtitleY + i * (subtitleSize + 2)))
       }
 

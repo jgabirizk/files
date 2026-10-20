@@ -694,22 +694,39 @@ function generate728x90Code(config: ExportConfig): string {
       
     } else {
       var titleSize = Math.round(H * 0.26 * FS.title);
+      var subtitleSize = Math.round(H * 0.21 * FS.subtitle);
+      ctx.font = '500 ' + subtitleSize + 'px "Reckless Neue", serif';
+      var subtitleLines = wrapText(subtitle, maxTextWidth, "subtitle");
+      var subtitleCount = subtitleLines.filter(function (l) { return l.trim(); }).length;
       ctx.font = "600 " + titleSize + "px Graphik, sans-serif";
+      var titleLines = wrapText(title, maxTextWidth);
+      // Centre cap height of the first line to the baseline of the last,
+      // matching the editor preview.
+      var capBox = function (font) {
+        ctx.font = font;
+        var m = ctx.measureText("H");
+        return [-m.actualBoundingBoxAscent, m.actualBoundingBoxDescent];
+      };
+      var titleCap = capBox("600 " + titleSize + "px Graphik, sans-serif");
+      var subtitleCap = capBox('500 ' + subtitleSize + 'px "Reckless Neue", serif');
+      var titleBlockH = titleLines.length * (titleSize + 2);
+      var inkBottom = subtitleCount
+        ? titleBlockH + 4 + (subtitleCount - 1) * (subtitleSize + 2) + subtitleCap[1]
+        : (titleLines.length - 1) * (titleSize + 2) + titleCap[1];
+      var blockTop = Math.max(0, (H - redBarHeight - (inkBottom - titleCap[0])) / 2 - titleCap[0]);
+      
       ctx.fillStyle = txt(titleProgress);
       var stdTslide = textSlide(titleProgress);
-      var titleY = pad + stdTslide[1];
-      var titleLines = wrapText(title, maxTextWidth);
+      var titleY = blockTop + stdTslide[1];
       for (var ti = 0; ti < titleLines.length; ti++) {
         drawCopyLine("title", titleLines, ti, titleLines[ti], textX + stdTslide[0], titleY + ti * (titleSize + 2));
       }
       var titleBottom = titleY + titleLines.length * (titleSize + 2);
       
-      var subtitleSize = Math.round(H * 0.21 * FS.subtitle);
       ctx.font = '500 ' + subtitleSize + 'px "Reckless Neue", serif';
       ctx.fillStyle = txt(subtitleProgress);
       var stdSslide = textSlide(subtitleProgress);
       var subtitleY = titleBottom + 4 + stdSslide[1];
-      var subtitleLines = wrapText(subtitle, maxTextWidth, "subtitle");
       for (var si = 0; si < subtitleLines.length; si++) {
         drawCopyLine("subtitle", subtitleLines, si, subtitleLines[si], textX + stdSslide[0], subtitleY + si * (subtitleSize + 2));
       }
