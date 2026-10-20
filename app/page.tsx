@@ -2198,10 +2198,10 @@ export default function AdsGenerator() {
                 const current = prev[selectedSize]
                 if (current.synced) {
                   // Unsync: copy current global values as starting point
-                  return { ...prev, [selectedSize]: { synced: false, title, subtitle, eyebrowText, ctaText } }
+                  return { ...prev, [selectedSize]: { synced: false, title, subtitle, eyebrowText, title2, ctaText } }
                 } else {
                   // Re-sync: revert to global values
-                  return { ...prev, [selectedSize]: { synced: true, title, subtitle, eyebrowText, ctaText } }
+                  return { ...prev, [selectedSize]: { synced: true, title, subtitle, eyebrowText, title2, ctaText } }
                 }
               })
             }

@@ -305,7 +305,11 @@ function generateAnimationJS(
   const { width, height } = AD_SIZES[size]
   const padding = AD_PADDING[size]
   const shadow = config.shadows[size]
-  const overrides = config.copyOverrides[size] || {}
+  // A synced size follows the shared copy, exactly as the preview's effectiveCopy does. Its stored fields
+  // are stale snapshots (the build-line editor only writes the shared title2), so they must not leak out.
+  type SizeCopy = { synced?: boolean; title?: string; subtitle?: string; eyebrow?: string; eyebrowText?: string; title2?: string; cta?: string; ctaText?: string }
+  const rawOverrides = (config.copyOverrides[size] || {}) as SizeCopy
+  const overrides: SizeCopy = rawOverrides.synced ? {} : { ...rawOverrides, eyebrow: rawOverrides.eyebrow ?? rawOverrides.eyebrowText }
   
   const activeTitle = overrides.title || config.title
   const activeSubtitle = overrides.subtitle || config.subtitle
