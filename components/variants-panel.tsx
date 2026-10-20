@@ -2,17 +2,27 @@
 
 import { Plus, Trash2 } from "lucide-react"
 import { CopyTextarea, type CopyBoxAlign } from "@/components/copy-textarea"
+import { BuildLinesEditor } from "@/components/build-lines-editor"
 
 export type VariantCopy = { title: string; subtitle: string; eyebrowText: string; title2: string; ctaText: string }
 export type VariantWrap = { title: number; subtitle: number; cta?: number }
 export type VariantFontScale = { title: number; subtitle: number; cta: number }
 // Absent fields mean "follow this size's own setting", so a variant only diverges where someone changed it.
 export type VariantText = { wrap?: VariantWrap; fontScale?: VariantFontScale }
-export type AdVariant = { id: string; size: string; label: string; copy: VariantCopy; text?: VariantText }
+export type VariantLayout = "standard" | "eyebrow" | "two-frame" | "build"
+/** copyLayout absent = follow the size's layout. A different layout runs that layout's default timing. */
+export type AdVariant = { id: string; size: string; label: string; copy: VariantCopy; text?: VariantText; copyLayout?: VariantLayout }
+
+const LAYOUT_LABEL: Record<VariantLayout, string> = {
+  standard: "Standard",
+  eyebrow: "Eyebrow",
+  "two-frame": "Two-frame",
+  build: "Two-line build",
+}
 
 interface Props {
   size: string
-  copyLayout: "standard" | "eyebrow" | "two-frame" | "build"
+  copyLayout: VariantLayout
   variants: AdVariant[]
   activeId: string | null
   onAdd: () => void
@@ -27,6 +37,8 @@ const field =
 
 export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onSelect, onUpdate, onRemove, boxAlign }: Props) {
   const active = variants.find((v) => v.id === activeId) ?? null
+  const sizeLayout = copyLayout
+  copyLayout = active?.copyLayout ?? sizeLayout
   const fields: { key: keyof VariantCopy; label: string; rows: number }[] = [
     ...(copyLayout === "eyebrow" ? [{ key: "eyebrowText" as const, label: "Eyebrow", rows: 1 }] : []),
     { key: "title", label: copyLayout === "two-frame" ? "Headline · frame 1" : copyLayout === "build" ? "Line 1" : "Headline", rows: 2 },
@@ -93,8 +105,48 @@ export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onS
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
+          <div>
+            <span id="variant-layout-label" className="mb-1 block text-[11px] text-gray-400">
+              Copy layout
+            </span>
+            <div role="radiogroup" aria-labelledby="variant-layout-label" className="grid grid-cols-2 gap-1">
+              {([null, "standard", "eyebrow", "two-frame", "build"] as (VariantLayout | null)[]).map((l) => {
+                const on = (active.copyLayout ?? null) === l
+                return (
+                  <button
+                    key={l ?? "inherit"}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => onUpdate(active.id, { copyLayout: l ?? undefined })}
+                    className={`rounded-md px-2 py-1.5 text-[11px] transition-colors ${
+                      l === null ? "col-span-2" : ""
+                    } ${on ? "bg-primary text-white" : "bg-sidebar-border text-gray-300 hover:bg-white/10"}`}
+                  >
+                    {l === null ? `Same as ${size} (${LAYOUT_LABEL[sizeLayout]})` : LAYOUT_LABEL[l]}
+                  </button>
+                )
+              })}
+            </div>
+            {active.copyLayout && active.copyLayout !== sizeLayout && (
+              <p className="mt-1 text-[10px] leading-relaxed text-gray-500">
+                Runs the default {LAYOUT_LABEL[active.copyLayout]} timing; the timeline edits {size}&apos;s own layout.
+              </p>
+            )}
+          </div>
           {fields.map((f) => (
             <div key={f.key}>
+              {copyLayout === "build" && f.key === "title2" ? (
+                <BuildLinesEditor
+                  idPrefix={`variant-${active.id}`}
+                  value={active.copy.title2}
+                  onChange={(value) => onUpdate(active.id, { copy: { ...active.copy, title2: value } })}
+                  align={boxAlign}
+                  lineHeight={1.5}
+                  labelClassName="text-[11px] text-gray-400"
+                  boxClassName="rounded-md border border-sidebar-border bg-sidebar px-2 py-1.5 text-[12px] text-sidebar-foreground focus-within:border-primary"
+                />
+              ) : (<>
               <label htmlFor={`variant-${f.key}`} className="mb-1 block text-[11px] text-gray-400">
                 {f.label}
               </label>
@@ -107,6 +159,7 @@ export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onS
                 onChange={(value) => onUpdate(active.id, { copy: { ...active.copy, [f.key]: value } })}
                 boxClassName="rounded-md border border-sidebar-border bg-sidebar px-2 py-1.5 text-[12px] text-sidebar-foreground focus-within:border-primary"
               />
+              </>)}
             </div>
           ))}
           <p className="text-[10px] leading-relaxed text-gray-500">

@@ -8,6 +8,8 @@ import JSZip from "jszip"
 type GifReportRow = { size: string; label?: string; bytes: number; fps: number; colors: number }
 import { TextMotionPanel } from "@/components/text-motion-panel"
 import { VariantsPanel, type AdVariant, type VariantCopy } from "@/components/variants-panel"
+import { BuildLinesEditor } from "@/components/build-lines-editor"
+import { buildTiming, firstBuildPart, splitBuild } from "@/lib/build-lines"
 import { CopyTextarea, type CopyBoxAlign } from "@/components/copy-textarea"
 import { proportionalCrop } from "@/lib/auto-crop"
 import { breakWidth, CANVAS_SCALE } from "@/lib/text-metrics"
@@ -167,6 +169,9 @@ const DEFAULT_TIMING_BUILD: SizeTiming = framesToTiming(125, {
 })
 
 const DEFAULT_BG_TIMING: ElemTiming = { start: 0, end: 27.2 }
+
+const timingDefaultsFor = (l: CopyLayout): SizeTiming =>
+  l === "two-frame" ? DEFAULT_TIMING_TWO_FRAME : l === "build" ? DEFAULT_TIMING_BUILD : DEFAULT_TIMING
 
 type FontScale = { title: number; subtitle: number; cta: number }
 
@@ -748,14 +753,27 @@ export default function AdsGenerator() {
   const drawOverlay = useCallback((ctx: CanvasRenderingContext2D, animProgress: number, sizeArg?: AdSize, variantArg?: string | null) => {
     const selectedSize = sizeArg ?? currentSize
     const { width, height } = AD_SIZES[selectedSize]
-    const { title: rawTitle, subtitle: rawSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
+    const { title: rawTitle, subtitle: rawSubtitle, eyebrowText: activeEyebrow, title2: rawTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
     // Two-line build: both sentences form one headline block (so the layout is
     // reserved for both and nothing moves when line 2 lands); paragraphs from
     // BUILD_SPLIT on belong to line 2 and run on the title2 timing.
-    const isBuild = copyLayout === "build"
-    const activeTitle = isBuild ? `${rawTitle}\n${activeTitle2}` : rawTitle
+    // A variant can carry its own copy layout; otherwise it follows the size's.
+    const variantRec = variantArg ? variants.find((x) => x.id === variantArg && x.size === selectedSize) : undefined
+    const layout: CopyLayout = variantRec?.copyLayout ?? copyLayout
+    const isBuild = layout === "build"
+    const buildParts = splitBuild(rawTitle2)
+    const activeTitle2 = buildParts[0]
+    const activeTitle = isBuild ? [rawTitle, ...buildParts].join("\n") : rawTitle
     const activeSubtitle = isBuild ? "" : rawSubtitle
-    const BUILD_SPLIT = isBuild ? rawTitle.split("\n").length : Infinity
+    // Paragraph index where build lines 2, 3, ... start; a paragraph's line is how many of these it has passed.
+    const BUILD_STARTS: number[] = []
+    if (isBuild) {
+      let p = 0
+      for (const part of [rawTitle, ...buildParts.slice(0, -1)]) {
+        p += part.split("\n").length
+        BUILD_STARTS.push(p)
+      }
+    }
     const variantText = variantArg ? variants.find((x) => x.id === variantArg && x.size === selectedSize)?.text : undefined
     const fsRaw = variantText?.fontScale ?? fontScale[selectedSize]
     const FS = { title: (fsRaw?.title ?? 100) / 100, subtitle: (fsRaw?.subtitle ?? 100) / 100, cta: (fsRaw?.cta ?? 100) / 100 }
@@ -781,7 +799,16 @@ export default function AdsGenerator() {
     ctx.fillRect(0, 0, width, height)
 
     // Element timing
-    const t = elemTimings[selectedSize]
+    const tBase: SizeTiming = layout === copyLayout ? elemTimings[selectedSize] : timingDefaultsFor(layout)
+    const bt = isBuild ? buildTiming(tBase.title, tBase.title2, buildParts.length + 1) : null
+    const t: SizeTiming =
+      bt && bt.ctaShift > 0
+        ? (() => {
+            const len = tBase.cta.end - tBase.cta.start
+            const cs = Math.min(tBase.cta.start + bt.ctaShift, 100 - len)
+            return { ...tBase, cta: { start: cs, end: cs + len } }
+          })()
+        : tBase
 
     // Text slide-in direction helper: returns [dx, dy] offset based on progress (0=start, 1=final)
     // The slide distance scales with canvas size for a consistent feel across formats.
@@ -820,7 +847,7 @@ export default function AdsGenerator() {
     if (!showRedBar) {
       // Red bar / block removed by the user
     } else if (layoutType === "red-bar") {
-      const redBarTimingKey = copyLayout === "standard" || copyLayout === "build" ? "redBar" : "eyebrow"
+      const redBarTimingKey = layout === "standard" || layout === "build" ? "redBar" : "eyebrow"
       const redBarTiming = t[redBarTimingKey] || t.redBar
       const redBarDelay = redBarTiming.start / 100
       const redBarDuration = Math.max(0.01, (redBarTiming.end - redBarTiming.start) / 100)
@@ -964,7 +991,7 @@ export default function AdsGenerator() {
       // inside the same string after a newline; it is drawn after line 1 on that row.
       const segsOf = (l: string) => (build ? l.split("\n") : [l])
       const paras = paraOfLines.get(lines)
-      const sentenceOf = (lineIdx: number, seg: number) => (build && (paras?.[lineIdx] ?? 0) + seg >= BUILD_SPLIT ? 1 : 0)
+      const sentenceOf = (lineIdx: number, seg: number) => (build ? BUILD_STARTS.filter((st) => (paras?.[lineIdx] ?? 0) + seg >= st).length : 0)
       const segments = segsOf(line)
       if (!build && !revealed) {
         if (maxW !== undefined) ctx.fillText(line, x, y, maxW)
@@ -976,10 +1003,10 @@ export default function AdsGenerator() {
       let cx = x
       segments.forEach((seg, si) => {
         const sentence = sentenceOf(i, si)
-        const segKey = sentence === 1 ? "title2" : key
-        const timing = segKey === "title" ? t.title : segKey === "title2" ? t.title2 || { start: 55, end: 67 } : t.subtitle
+        const segKey = sentence >= 1 ? "title2" : key
+        const timing = sentence >= 1 && bt ? bt.line(sentence) : segKey === "title" ? t.title : segKey === "title2" ? t.title2 || { start: 55, end: 67 } : t.subtitle
         if (!revealed) {
-          if (sentence === 1) {
+          if (sentence >= 1) {
             const p = easeEntrance(Math.max(0, Math.min(1, (animProgress - timing.start / 100) / Math.max(0.01, (timing.end - timing.start) / 100))))
             const [dx, dy] = textSlide(p)
             ctx.globalAlpha = baseAlpha * p
@@ -1049,7 +1076,7 @@ export default function AdsGenerator() {
       const frame1Alpha728 = titleProgress * (1 - title1OutProgress728)
       const frame2Alpha728 = title2Progress728
 
-      if (copyLayout === "two-frame") {
+      if (layout === "two-frame") {
         // --- 728x90 TWO-FRAME LAYOUT ---
         const titleSize = Math.round(height * 0.26 * FS.title)
 
@@ -1069,7 +1096,7 @@ export default function AdsGenerator() {
         const [t2dx728, t2dy728] = textSlide(title2Progress728)
         drawCopyLine("title2", [activeTitle2], 0, activeTitle2, textX + t2dx728, textY + t2dy728)
 
-      } else if (copyLayout === "eyebrow") {
+      } else if (layout === "eyebrow") {
         // --- 728x90 EYEBROW LAYOUT ---
         const titleSize = Math.round(height * 0.26 * FS.title)
         const eyebrowSize = Math.round(height * 0.18 * FS.title)
@@ -1213,7 +1240,7 @@ export default function AdsGenerator() {
       const frame2Alpha = title2Progress
 
       // Different rendering based on copy layout
-      if (copyLayout === "two-frame") {
+      if (layout === "two-frame") {
         // --- TWO-FRAME LAYOUT ---
         // Compute positioning (same as standard, but reuse titleStartY)
         const logoBottom = padding + logoHeight
@@ -1277,7 +1304,7 @@ export default function AdsGenerator() {
           ctaProgress
         )
 
-      } else if (copyLayout === "eyebrow") {
+      } else if (layout === "eyebrow") {
         // --- EYEBROW LAYOUT ---
         // Eyebrow font: same serif as subtitle (Reckless Neue)
         // Proportions: 300x250 title~24→eyebrow~17, 160x600 same ratio, 970x250 title~30→eyebrow~20
@@ -1517,7 +1544,7 @@ export default function AdsGenerator() {
           const textX = contentX + logoW + 18
           const textMaxW = geo.x + geo.w - geo.pad - textX
 
-          if (copyLayout === "two-frame") {
+          if (layout === "two-frame") {
             // Single title line (frame 1 / frame 2), vertically centered
             const groupTop = geo.y + (geo.h - f.title) / 2
             ctx.font = `600 ${f.title}px Graphik, sans-serif`
@@ -1527,7 +1554,7 @@ export default function AdsGenerator() {
             const [t2dx, t2dy] = textSlide(tf2InProgress)
             ctx.fillStyle = txt(frame2Alpha)
             drawCopyLine("title2", [activeTitle2], 0, activeTitle2, textX + t2dx, groupTop + t2dy, textMaxW)
-          } else if (copyLayout === "eyebrow") {
+          } else if (layout === "eyebrow") {
             // Eyebrow (serif, white, no highlight) above title; group vertically centered
             const groupH = eyebrowSize + eyebrowGap + f.title
             const groupTop = geo.y + (geo.h - groupH) / 2
@@ -1585,13 +1612,13 @@ export default function AdsGenerator() {
           let frame1Lines: string[] = []
           let frame2Lines: string[] = []
           let groupH = 0
-          if (copyLayout === "two-frame") {
+          if (layout === "two-frame") {
             ctx.font = `600 ${f.title}px Graphik, sans-serif`
             frame1Lines = wrapText(activeTitle, contentW)
             frame2Lines = wrapText(activeTitle2, contentW)
             const maxLines = Math.max(frame1Lines.length, frame2Lines.length)
             groupH = maxLines * f.title + (maxLines - 1) * f.lineGap
-          } else if (copyLayout === "eyebrow") {
+          } else if (layout === "eyebrow") {
             ctx.font = `600 ${f.title}px Graphik, sans-serif`
             titleLines = wrapText(activeTitle, contentW)
             groupH =
@@ -1609,7 +1636,7 @@ export default function AdsGenerator() {
           // Center the group vertically in the available band
           let cursorY = logoEnd + Math.max(0, (ctaTop - logoEnd - groupH) / 2)
 
-          if (copyLayout === "two-frame") {
+          if (layout === "two-frame") {
             ctx.font = `600 ${f.title}px Graphik, sans-serif`
             const [f1dx, f1dy] = textSlide(titleProgress)
             ctx.fillStyle = txt(frame1Alpha)
@@ -1621,7 +1648,7 @@ export default function AdsGenerator() {
             frame2Lines.forEach((line, i) =>
               drawCopyLine("title2", frame2Lines, i, line, contentX + f2dx, cursorY + i * (f.title + f.lineGap) + f2dy),
             )
-          } else if (copyLayout === "eyebrow") {
+          } else if (layout === "eyebrow") {
             // Eyebrow (serif, white, no highlight) then title — no subtitle
             const [ebdx, ebdy] = textSlide(eyebrowProgress)
             ctx.font = `500 ${eyebrowSize}px "Reckless Neue", serif`
@@ -2232,7 +2259,10 @@ export default function AdsGenerator() {
                 }
                 writeTimings(updates)
               }
-              return { frames, set }
+              const lineCount = splitBuild(isSynced ? title2 : ov.title2).length + 1
+              const bt = buildTiming(tt.title, tt.title2, lineCount)
+              const overflow = bt.lastEnd > 100 + 1e-6 || tt.cta.end + bt.ctaShift > 100 + 1e-6
+              return { frames, set, lineCount, overflow }
             })()
 
             return (
@@ -2347,7 +2377,7 @@ export default function AdsGenerator() {
                       </div>
                     </div>
                     <div className="mt-1 text-[10px] text-gray-500">
-                      {(buildHold.frames / 25).toFixed(2)}s at 25 fps after line 1 lands. Moves line 2 and the CTA; dragging Line 2 on the timeline changes it too.
+                      {(buildHold.frames / 25).toFixed(2)}s at 25 fps after line 1 lands, repeated before each later line. Moves line 2 and the CTA; dragging Line 2 on the timeline changes it too.{buildHold.lineCount > 2 ? ` ${buildHold.lineCount === 3 ? "Line 3 follows" : `Lines 3–${buildHold.lineCount} follow`} line 2's spacing and push the CTA back to match.` : ""}{buildHold.overflow ? " The last line now runs past the end of the ad; lengthen the duration or shorten the hold." : ""}
                     </div>
                   </div>
                 )}
@@ -2402,6 +2432,17 @@ export default function AdsGenerator() {
 
                 {fields.map(({ key, label, value }) => (
                   <div key={key}>
+                    {copyLayout === "build" && key === "title2" ? (
+                      <BuildLinesEditor
+                        idPrefix="copy"
+                        value={value}
+                        align={copyBoxAlign}
+                        lineHeight={1.375}
+                        labelClassName="text-[11px] text-gray-400"
+                        onChange={(v) => isSynced ? setGlobalField(key, v) : setOverrideField(key, v)}
+                        boxClassName={`bg-sidebar-border rounded-lg px-3 py-2 text-[13px] focus-within:ring-1 focus-within:ring-primary ${!isSynced ? "ring-1 ring-amber-500/40" : ""}`}
+                      />
+                    ) : (<>
                     <label className="block text-[11px] text-gray-400 mb-2">{label}</label>
                     {key === "title" || key === "title2" || key === "subtitle" ? (
                       <CopyTextarea
@@ -2420,6 +2461,7 @@ export default function AdsGenerator() {
                         className={`w-full bg-sidebar-border border-0 rounded-lg px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-primary ${!isSynced ? "ring-1 ring-amber-500/40" : ""}`}
                       />
                     )}
+                    </>)}
                   </div>
                 ))}
 
@@ -2451,7 +2493,7 @@ export default function AdsGenerator() {
                       : setWrapWidth((prev) => ({ ...prev, [selectedSize]: next }))
                   }
                   headline={activeTitle}
-                  headline2={copyLayout === "two-frame" || copyLayout === "build" ? activeTitle2 : ""}
+                  headline2={copyLayout === "build" ? splitBuild(activeTitle2).join("\n") : copyLayout === "two-frame" ? firstBuildPart(activeTitle2) : ""}
                   body={activeSubtitle}
                   timings={elemTimings[selectedSize]}
                   totalFrames={duration * FPS}
@@ -2925,6 +2967,8 @@ export default function AdsGenerator() {
                       copy: { title: v.copy.title, subtitle: v.copy.subtitle, eyebrow: v.copy.eyebrowText, title2: v.copy.title2, cta: v.copy.ctaText },
                       wrap: v.text?.wrap,
                       fontScale: v.text?.fontScale,
+                      copyLayout: v.copyLayout,
+                      timing: v.copyLayout && v.copyLayout !== copyLayout ? timingDefaultsFor(v.copyLayout) : undefined,
                     })),
                   }).then(setExportReport)
                 }}

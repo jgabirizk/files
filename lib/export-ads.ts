@@ -1,5 +1,6 @@
 import JSZip from "jszip"
 import { fontMetric, buildAdvanceTable, CANVAS_SCALE, type AdvanceTable } from "./text-metrics"
+import { buildTiming, splitBuild } from "./build-lines"
 import { buildGlyphTable, installOutlines, type GlyphTable } from "./glyph-outlines"
 import { makeBezier, CURVES, TEXT_SLIDE_PX, FPS, WORD_ENTRANCE_FRAMES, WORD_STAGGER_FRAMES, type WordReveal } from "./motion"
 
@@ -135,6 +136,10 @@ export type ExportVariant = {
   /** Absent = the variant follows its size's own wrap / font size. */
   wrap?: { title: number; subtitle: number; cta?: number }
   fontScale?: FontScale
+  /** Absent = the size's layout. */
+  copyLayout?: ExportConfig["copyLayout"]
+  /** Timing for this variant's size when its layout differs from the size's. */
+  timing?: ElemTiming
 }
 
 const fontScaleFor = (config: ExportConfig, size: AdSize) => {
@@ -300,13 +305,33 @@ function generateAnimationJS(
   const { width, height } = AD_SIZES[size]
   const padding = AD_PADDING[size]
   const shadow = config.shadows[size]
-  const timing = config.elemTimings[size]
   const overrides = config.copyOverrides[size] || {}
   
   const activeTitle = overrides.title || config.title
   const activeSubtitle = overrides.subtitle || config.subtitle
   const activeEyebrow = overrides.eyebrow || config.eyebrowText
-  const activeTitle2 = overrides.title2 || config.title2
+  const buildParts = splitBuild(overrides.title2 || config.title2)
+  const activeTitle2 = buildParts[0]
+  // Build: each line gets its own span, and the CTA moves back one step per line past 2.
+  const baseTiming = config.elemTimings[size] as ElemTiming & Record<string, { start: number; end: number }>
+  const bt = config.copyLayout === "build" ? buildTiming(baseTiming.title, baseTiming.title2, buildParts.length + 1) : null
+  const timing =
+    bt && bt.ctaShift > 0
+      ? (() => {
+          const len = baseTiming.cta.end - baseTiming.cta.start
+          const cs = Math.min(baseTiming.cta.start + bt.ctaShift, 100 - len)
+          return { ...baseTiming, cta: { start: cs, end: cs + len } }
+        })()
+      : baseTiming
+  const buildStarts: number[] = []
+  if (bt) {
+    let p = 0
+    for (const part of [activeTitle, ...buildParts.slice(0, -1)]) {
+      p += part.split("\n").length
+      buildStarts.push(p)
+    }
+  }
+  const buildSpans = bt ? buildParts.map((_, i) => bt.line(i + 1)) : []
   const activeCtaText = overrides.cta || config.ctaText
   
   const resolvedDirection = shadow.direction === "auto"
@@ -347,8 +372,9 @@ var DURATION = ${(config.duration ?? 5) * 1000};
 // Two-line build: both sentences form one headline block; paragraphs from
 // BUILD_SPLIT on are line 2 and run on the title2 timing.
 var IS_BUILD = ${config.copyLayout === "build" ? "true" : "false"};
-var BUILD_SPLIT = ${config.copyLayout === "build" ? activeTitle.split("\n").length : 1e9};
-var title = ${JSON.stringify(config.copyLayout === "build" ? `${activeTitle}\n${activeTitle2}` : activeTitle)};
+var BUILD_STARTS = ${JSON.stringify(buildStarts)};
+var BUILD_SPANS = ${JSON.stringify(buildSpans)};
+var title = ${JSON.stringify(config.copyLayout === "build" ? [activeTitle, ...buildParts].join("\n") : activeTitle)};
 var subtitle = ${JSON.stringify(config.copyLayout === "build" ? "" : activeSubtitle)};
 var eyebrow = ${JSON.stringify(activeEyebrow)};
 var title2 = ${JSON.stringify(activeTitle2)};
@@ -462,7 +488,12 @@ function drawCopyLine(key, lines, i, line, x, y, maxW) {
   }
   // Single-line sizes pass the headline unwrapped, so line 2 can sit after a newline in the same string.
   function segsOf(l) { return build ? l.split("\\n") : [l]; }
-  function sentenceOf(lineIdx, seg) { return build && ((lines.paras ? lines.paras[lineIdx] : 0) || 0) + seg >= BUILD_SPLIT ? 1 : 0; }
+  function sentenceOf(lineIdx, seg) {
+    if (!build) return 0;
+    var pi = ((lines.paras ? lines.paras[lineIdx] : 0) || 0) + seg, n = 0;
+    for (var b = 0; b < BUILD_STARTS.length; b++) if (pi >= BUILD_STARTS[b]) n++;
+    return n;
+  }
   var total = (DURATION / 1000) * FPS_;
   var frameNow = NOW_PROGRESS * total;
   var space = ctx.measureText(" ").width;
@@ -472,10 +503,10 @@ function drawCopyLine(key, lines, i, line, x, y, maxW) {
   for (var si = 0; si < segments.length; si++) {
     var seg = segments[si];
     var sentence = sentenceOf(i, si);
-    var segKey = sentence === 1 ? "title2" : key;
-    var span = segKey === "title" ? timing.title : segKey === "title2" ? (timing.title2 || { start: 55, end: 67 }) : timing.subtitle;
+    var segKey = sentence >= 1 ? "title2" : key;
+    var span = sentence >= 1 && BUILD_SPANS[sentence - 1] ? BUILD_SPANS[sentence - 1] : segKey === "title" ? timing.title : segKey === "title2" ? (timing.title2 || { start: 55, end: 67 }) : timing.subtitle;
     if (!revealed) {
-      if (sentence === 1) {
+      if (sentence >= 1) {
         var p2 = easeEntrance(Math.max(0, Math.min(1, (NOW_PROGRESS - span.start / 100) / Math.max(0.01, (span.end - span.start) / 100))));
         var sl = textSlide(p2);
         ctx.globalAlpha = base * p2;
@@ -973,13 +1004,13 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
     .filter((x): x is { img: HTMLImageElement; name: string } => x !== null)
   const imageFiles = loaded.map((l) => l.name)
 
-  const copy = [config.title, config.subtitle, config.eyebrowText, config.title2, config.ctaText]
-  for (const o of [...Object.values(config.copyOverrides || {}), ...(config.variants || []).map((v) => v.copy)]) copy.push(...Object.values(o || {}).filter((v): v is string => typeof v === "string"))
+  const copy = [config.title, config.subtitle, config.eyebrowText, splitBuild(config.title2).join("\n"), config.ctaText]
+  for (const o of [...Object.values(config.copyOverrides || {}), ...(config.variants || []).map((v) => v.copy)]) copy.push(...Object.values(o || {}).filter((v): v is string => typeof v === "string").map((v) => splitBuild(v).join("\n")))
   // Group every piece of copy by the face it is set in, so each face carries only the glyphs it draws.
   const byField = (field: "title" | "title2" | "subtitle" | "eyebrow" | "cta", base: string) => [
     base,
     ...[...Object.values(config.copyOverrides || {}), ...(config.variants || []).map((v) => v.copy)].map((o) => (o as Record<string, unknown> | undefined)?.[field]).filter((v): v is string => typeof v === "string"),
-  ]
+  ].map((v) => splitBuild(v).join("\n"))
   const glyphs = await buildGlyphTable({
     "600|Graphik": [...byField("title", config.title), ...byField("title2", config.title2)],
     "500|Graphik": byField("cta", config.ctaText),
@@ -997,6 +1028,8 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
           copyOverrides: { ...base.copyOverrides, [v.size]: v.copy },
           wrapWidth: v.wrap ? { ...base.wrapWidth, [v.size]: v.wrap } : base.wrapWidth,
           fontScale: v.fontScale ? { ...base.fontScale, [v.size]: v.fontScale } : base.fontScale,
+          copyLayout: v.copyLayout ?? base.copyLayout,
+          elemTimings: v.timing ? { ...base.elemTimings, [v.size]: v.timing } : base.elemTimings,
         } })),
   ]
   for (const job of jobs) {
