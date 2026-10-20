@@ -84,7 +84,7 @@ interface ExportConfig {
   layers: LayerConfig[]
   bgMode: "single" | "multi-layer"
   crops: Record<AdSize, CropConfig>
-  copyLayout: "standard" | "eyebrow" | "two-frame"
+  copyLayout: "standard" | "eyebrow" | "two-frame" | "build"
   title: string
   subtitle: string
   eyebrowText: string
@@ -344,8 +344,12 @@ function breakWidth(s) { var r = fontMetric(ADV, ctx.font, s); return r.width ==
 var W = ${width}, H = ${height}, pad = ${padding};
 var DURATION = ${(config.duration ?? 5) * 1000};
 
-var title = ${JSON.stringify(activeTitle)};
-var subtitle = ${JSON.stringify(activeSubtitle)};
+// Two-line build: both sentences form one headline block; paragraphs from
+// BUILD_SPLIT on are line 2 and run on the title2 timing.
+var IS_BUILD = ${config.copyLayout === "build" ? "true" : "false"};
+var BUILD_SPLIT = ${config.copyLayout === "build" ? activeTitle.split("\n").length : 1e9};
+var title = ${JSON.stringify(config.copyLayout === "build" ? `${activeTitle}\n${activeTitle2}` : activeTitle)};
+var subtitle = ${JSON.stringify(config.copyLayout === "build" ? "" : activeSubtitle)};
 var eyebrow = ${JSON.stringify(activeEyebrow)};
 var title2 = ${JSON.stringify(activeTitle2)};
 var ctaText = ${JSON.stringify(activeCtaText)};
@@ -400,6 +404,7 @@ function splitWords(s) { return s.split(" ").filter(function(w) { return w; }); 
 function wrapText(text, maxWidth, key) {
   var limit = maxWidth * (WRAP[key || "title"] / 100);
   var lines = [];
+  var paras = [];
   var paragraphs = text.split("\\n");
   for (var p = 0; p < paragraphs.length; p++) {
     var words = splitWords(paragraphs[p]);
@@ -408,13 +413,16 @@ function wrapText(text, maxWidth, key) {
       var test = current ? current + " " + words[i] : words[i];
       if (breakWidth(test) > limit && current) {
         lines.push(current);
+        paras.push(p);
         current = words[i];
       } else {
         current = test;
       }
     }
     lines.push(current);
+    paras.push(p);
   }
+  lines.paras = paras;
   return lines;
 }
 
@@ -447,29 +455,57 @@ function drawCta(text, x, y, maxW) { var b = ctaLayout(text, maxW); paintCtaLine
 // Word-by-word reveal: 13f entrance per word, 2f apart, 12px drop from above.
 function drawCopyLine(key, lines, i, line, x, y, maxW) {
   var revealed = WORD_REVEAL === (key === "subtitle" ? "subtitle" : "title");
-  if (!revealed) {
+  var build = IS_BUILD && key === "title";
+  if (!build && !revealed) {
     if (maxW !== undefined) ctx.fillText(line, x, y, maxW); else ctx.fillText(line, x, y);
     return;
   }
-  var span = key === "title" ? timing.title : key === "title2" ? (timing.title2 || { start: 55, end: 67 }) : timing.subtitle;
+  // Single-line sizes pass the headline unwrapped, so line 2 can sit after a newline in the same string.
+  function segsOf(l) { return build ? l.split("\\n") : [l]; }
+  function sentenceOf(lineIdx, seg) { return build && ((lines.paras ? lines.paras[lineIdx] : 0) || 0) + seg >= BUILD_SPLIT ? 1 : 0; }
   var total = (DURATION / 1000) * FPS_;
   var frameNow = NOW_PROGRESS * total;
-  var startFrame = (span.start / 100) * total;
-  var idx = 0;
-  for (var li = 0; li < i; li++) idx += splitWords(lines[li]).length;
   var space = ctx.measureText(" ").width;
   var base = ctx.globalAlpha;
+  var segments = segsOf(line);
   var cx = x;
-  var ws = splitWords(line);
-  for (var w = 0; w < ws.length; w++) {
-    var local = (frameNow - startFrame - idx * WORD_STAGGER) / WORD_FRAMES;
-    var pr = easeEntrance(Math.max(0, Math.min(1, local)));
-    ctx.globalAlpha = base * pr;
-    ctx.fillText(ws[w], cx, y - slideMax * (1 - pr));
-    cx += ctx.measureText(ws[w]).width + space;
-    idx++;
+  for (var si = 0; si < segments.length; si++) {
+    var seg = segments[si];
+    var sentence = sentenceOf(i, si);
+    var segKey = sentence === 1 ? "title2" : key;
+    var span = segKey === "title" ? timing.title : segKey === "title2" ? (timing.title2 || { start: 55, end: 67 }) : timing.subtitle;
+    if (!revealed) {
+      if (sentence === 1) {
+        var p2 = easeEntrance(Math.max(0, Math.min(1, (NOW_PROGRESS - span.start / 100) / Math.max(0.01, (span.end - span.start) / 100))));
+        var sl = textSlide(p2);
+        ctx.globalAlpha = base * p2;
+        ctx.fillText(seg, cx + sl[0], y + sl[1]);
+        ctx.globalAlpha = base;
+      } else if (maxW !== undefined && segments.length === 1) ctx.fillText(seg, cx, y, maxW);
+      else ctx.fillText(seg, cx, y);
+    } else {
+      // Word count restarts per sentence: line 2's first word starts on its own timing.
+      var startFrame = (span.start / 100) * total;
+      var idx = 0;
+      for (var li = 0; li < i; li++) {
+        var ls = segsOf(lines[li]);
+        for (var sj = 0; sj < ls.length; sj++) if (sentenceOf(li, sj) === sentence) idx += splitWords(ls[sj]).length;
+      }
+      for (var sk = 0; sk < si; sk++) if (sentenceOf(i, sk) === sentence) idx += splitWords(segments[sk]).length;
+      var wx = cx;
+      var ws = splitWords(seg);
+      for (var w = 0; w < ws.length; w++) {
+        var local = (frameNow - startFrame - idx * WORD_STAGGER) / WORD_FRAMES;
+        var pr = easeEntrance(Math.max(0, Math.min(1, local)));
+        ctx.globalAlpha = base * pr;
+        ctx.fillText(ws[w], wx, y - slideMax * (1 - pr));
+        wx += ctx.measureText(ws[w]).width + space;
+        idx++;
+      }
+      ctx.globalAlpha = base;
+    }
+    cx += ctx.measureText(seg).width + space;
   }
-  ctx.globalAlpha = base;
 }
 
 function drawTriangle(x, y, size, alpha) {
@@ -574,7 +610,7 @@ function startAnimation() {
     ctx.fillStyle = shadowGradient;
     ctx.fillRect(0, 0, W, H);
     
-    var redBarTimingKey = copyLayout === "standard" ? "redBar" : "eyebrow";
+    var redBarTimingKey = copyLayout === "standard" || copyLayout === "build" ? "redBar" : "eyebrow";
     var redBarTiming = timing[redBarTimingKey] || timing.redBar;
     var redBarDelay = redBarTiming.start / 100;
     var redBarDur = Math.max(0.01, (redBarTiming.end - redBarTiming.start) / 100);

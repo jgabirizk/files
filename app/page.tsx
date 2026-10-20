@@ -113,7 +113,7 @@ type LayerConfig = {
   timing: { start: number; end: number }
 }
 
-type CopyLayout = "standard" | "eyebrow" | "two-frame"
+type CopyLayout = "standard" | "eyebrow" | "two-frame" | "build"
 
 // Standard layout: redBar, title, subtitle, cta
 // Eyebrow layout: eyebrow (with highlight), title, cta
@@ -152,6 +152,18 @@ const DEFAULT_TIMING_TWO_FRAME: SizeTiming = framesToTiming(250, {
   title1out: [100, 108],
   title2:    [108, 121],
   cta:       [129, 142],
+})
+
+// Two-line build: line 1 enters 13f, holds 13f, then line 2 enters 13f below it.
+// Line 1 stays on screen; the CTA follows 8f after line 2 lands.
+const BUILD_HOLD_FRAMES = 13
+const DEFAULT_TIMING_BUILD: SizeTiming = framesToTiming(125, {
+  bg:       [0, 34],
+  redBar:   [0, 21],
+  title:    [8, 21],
+  subtitle: [16, 29],
+  title2:   [21 + BUILD_HOLD_FRAMES, 34 + BUILD_HOLD_FRAMES],
+  cta:      [42 + BUILD_HOLD_FRAMES, 55 + BUILD_HOLD_FRAMES],
 })
 
 const DEFAULT_BG_TIMING: ElemTiming = { start: 0, end: 27.2 }
@@ -532,7 +544,8 @@ export default function AdsGenerator() {
       restoringProjectRef.current = false
       return
     }
-    const timingDefaults = copyLayout === "two-frame" ? DEFAULT_TIMING_TWO_FRAME : DEFAULT_TIMING
+    const timingDefaults =
+      copyLayout === "two-frame" ? DEFAULT_TIMING_TWO_FRAME : copyLayout === "build" ? DEFAULT_TIMING_BUILD : DEFAULT_TIMING
     setElemTimings({
       "300x250": { ...timingDefaults },
       "160x600": { ...timingDefaults },
@@ -735,7 +748,14 @@ export default function AdsGenerator() {
   const drawOverlay = useCallback((ctx: CanvasRenderingContext2D, animProgress: number, sizeArg?: AdSize, variantArg?: string | null) => {
     const selectedSize = sizeArg ?? currentSize
     const { width, height } = AD_SIZES[selectedSize]
-    const { title: activeTitle, subtitle: activeSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
+    const { title: rawTitle, subtitle: rawSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
+    // Two-line build: both sentences form one headline block (so the layout is
+    // reserved for both and nothing moves when line 2 lands); paragraphs from
+    // BUILD_SPLIT on belong to line 2 and run on the title2 timing.
+    const isBuild = copyLayout === "build"
+    const activeTitle = isBuild ? `${rawTitle}\n${activeTitle2}` : rawTitle
+    const activeSubtitle = isBuild ? "" : rawSubtitle
+    const BUILD_SPLIT = isBuild ? rawTitle.split("\n").length : Infinity
     const variantText = variantArg ? variants.find((x) => x.id === variantArg && x.size === selectedSize)?.text : undefined
     const fsRaw = variantText?.fontScale ?? fontScale[selectedSize]
     const FS = { title: (fsRaw?.title ?? 100) / 100, subtitle: (fsRaw?.subtitle ?? 100) / 100, cta: (fsRaw?.cta ?? 100) / 100 }
@@ -800,7 +820,7 @@ export default function AdsGenerator() {
     if (!showRedBar) {
       // Red bar / block removed by the user
     } else if (layoutType === "red-bar") {
-      const redBarTimingKey = copyLayout === "standard" ? "redBar" : "eyebrow"
+      const redBarTimingKey = copyLayout === "standard" || copyLayout === "build" ? "redBar" : "eyebrow"
       const redBarTiming = t[redBarTimingKey] || t.redBar
       const redBarDelay = redBarTiming.start / 100
       const redBarDuration = Math.max(0.01, (redBarTiming.end - redBarTiming.start) / 100)
@@ -864,23 +884,30 @@ export default function AdsGenerator() {
     // Helper: wrap text to max width, returns array of lines
     // Enter in a copy field forces a break; the wrap-width slider narrows the column.
     const sizeWrap: { title: number; subtitle: number; cta?: number } = variantText?.wrap ?? wrapWidth[selectedSize] ?? { title: 100, subtitle: 100 }
+    // Remembers which source paragraph each wrapped line came from, so the
+    // two-line build can tell line 1's lines from line 2's.
+    const paraOfLines = new WeakMap<string[], number[]>()
     const wrapText = (text: string, maxWidth: number, key: "title" | "subtitle" = "title"): string[] => {
       const limit = maxWidth * (sizeWrap[key] / 100)
       const lines: string[] = []
-      for (const paragraph of text.split("\n")) {
+      const paras: number[] = []
+      text.split("\n").forEach((paragraph, pi) => {
         const words = paragraph.split(" ").filter(Boolean)
         let current = ""
         for (const word of words) {
           const test = current ? current + " " + word : word
           if (breakWidth(ctx, test) > limit && current) {
             lines.push(current)
+            paras.push(pi)
             current = word
           } else {
             current = test
           }
         }
         lines.push(current)
-      }
+        paras.push(pi)
+      })
+      paraOfLines.set(lines, paras)
       return lines
     }
 
@@ -932,27 +959,57 @@ export default function AdsGenerator() {
       maxW?: number,
     ) => {
       const revealed = wordReveal === (key === "subtitle" ? "subtitle" : "title")
-      if (!revealed) {
+      const build = isBuild && key === "title"
+      // Single-line sizes pass the whole headline unwrapped, so line 2 can sit
+      // inside the same string after a newline; it is drawn after line 1 on that row.
+      const segsOf = (l: string) => (build ? l.split("\n") : [l])
+      const paras = paraOfLines.get(lines)
+      const sentenceOf = (lineIdx: number, seg: number) => (build && (paras?.[lineIdx] ?? 0) + seg >= BUILD_SPLIT ? 1 : 0)
+      const segments = segsOf(line)
+      if (!build && !revealed) {
         if (maxW !== undefined) ctx.fillText(line, x, y, maxW)
         else ctx.fillText(line, x, y)
         return
       }
-      const timing = key === "title" ? t.title : key === "title2" ? t.title2 || { start: 55, end: 67 } : t.subtitle
-      const startFrame = (timing.start / 100) * totalFramesNow
-      let wordIndex = 0
-      for (let li = 0; li < i; li++) wordIndex += lines[li].split(" ").filter(Boolean).length
       const space = ctx.measureText(" ").width
       const baseAlpha = ctx.globalAlpha
       let cx = x
-      for (const word of line.split(" ").filter(Boolean)) {
-        const local = (frameNow - startFrame - wordIndex * WORD_STAGGER_FRAMES) / WORD_ENTRANCE_FRAMES
-        const p = easeEntrance(Math.max(0, Math.min(1, local)))
-        ctx.globalAlpha = baseAlpha * p
-        ctx.fillText(word, cx, y - TEXT_SLIDE_PX * (1 - p))
-        cx += ctx.measureText(word).width + space
-        wordIndex++
-      }
-      ctx.globalAlpha = baseAlpha
+      segments.forEach((seg, si) => {
+        const sentence = sentenceOf(i, si)
+        const segKey = sentence === 1 ? "title2" : key
+        const timing = segKey === "title" ? t.title : segKey === "title2" ? t.title2 || { start: 55, end: 67 } : t.subtitle
+        if (!revealed) {
+          if (sentence === 1) {
+            const p = easeEntrance(Math.max(0, Math.min(1, (animProgress - timing.start / 100) / Math.max(0.01, (timing.end - timing.start) / 100))))
+            const [dx, dy] = textSlide(p)
+            ctx.globalAlpha = baseAlpha * p
+            ctx.fillText(seg, cx + dx, y + dy)
+            ctx.globalAlpha = baseAlpha
+          } else if (maxW !== undefined && segments.length === 1) ctx.fillText(seg, cx, y, maxW)
+          else ctx.fillText(seg, cx, y)
+        } else {
+          // Word count restarts per sentence: line 2's first word starts on its own timing.
+          const startFrame = (timing.start / 100) * totalFramesNow
+          let wordIndex = 0
+          for (let li = 0; li < i; li++)
+            segsOf(lines[li]).forEach((s, sj) => {
+              if (sentenceOf(li, sj) === sentence) wordIndex += s.split(" ").filter(Boolean).length
+            })
+          for (let sj = 0; sj < si; sj++)
+            if (sentenceOf(i, sj) === sentence) wordIndex += segments[sj].split(" ").filter(Boolean).length
+          let wx = cx
+          for (const word of seg.split(" ").filter(Boolean)) {
+            const local = (frameNow - startFrame - wordIndex * WORD_STAGGER_FRAMES) / WORD_ENTRANCE_FRAMES
+            const p = easeEntrance(Math.max(0, Math.min(1, local)))
+            ctx.globalAlpha = baseAlpha * p
+            ctx.fillText(word, wx, y - TEXT_SLIDE_PX * (1 - p))
+            wx += ctx.measureText(word).width + space
+            wordIndex++
+          }
+          ctx.globalAlpha = baseAlpha
+        }
+        cx += ctx.measureText(seg).width + space
+      })
     }
 
     if (layoutType === "red-bar") {
@@ -1712,6 +1769,11 @@ export default function AdsGenerator() {
       rows.push(row("title1out", "Frame 1 out", "#6b7280", "exit", true))
       rows.push(row("title2", "Frame 2 in", "#185fa5", "entrance", true))
       rows.push(row("cta", "CTA", "#3b6d11", "entrance", true))
+    } else if (copyLayout === "build") {
+      if (showRedBar) rows.push(row("redBar", blockLabel, "#CC0000", "standard"))
+      rows.push(row("title", "Line 1", "#185fa5", "entrance", true))
+      rows.push(row("title2", "Line 2", "#185fa5", "entrance", true))
+      rows.push(row("cta", "CTA", "#3b6d11", "entrance", true))
     } else {
       if (showRedBar) rows.push(row("redBar", blockLabel, "#CC0000", "standard"))
       rows.push(row("title", "Title", "#185fa5", "entrance", true))
@@ -2136,14 +2198,49 @@ export default function AdsGenerator() {
               { key: "ctaText", label: "CTA Text", value: isSynced ? ctaText : ov.ctaText },
             ]
 
-            const fields = copyLayout === "eyebrow" ? eyebrowFields : copyLayout === "two-frame" ? twoFrameFields : standardFields
+            const buildFields: { key: CopyFieldKey; label: string; value: string }[] = [
+              { key: "title", label: "Line 1", value: isSynced ? title : ov.title },
+              { key: "title2", label: "Line 2", value: isSynced ? title2 : ov.title2 },
+              { key: "ctaText", label: "CTA Text", value: isSynced ? ctaText : ov.ctaText },
+            ]
+
+            const fields =
+              copyLayout === "eyebrow" ? eyebrowFields
+              : copyLayout === "two-frame" ? twoFrameFields
+              : copyLayout === "build" ? buildFields
+              : standardFields
+
+            // Hold = frames between line 1 landing and line 2 starting. Changing it
+            // moves line 2, and the CTA with it so it still lands after line 2.
+            const buildHold = (() => {
+              if (copyLayout !== "build") return null
+              const total = Math.round(duration * 25)
+              const tt = elemTimings[selectedSize]
+              const t2 = tt.title2 ?? { start: 55, end: 67 }
+              const frames = Math.round(((t2.start - tt.title.end) / 100) * total)
+              const set = (f: number) => {
+                const next = Math.max(0, Math.round(f))
+                const newStart = tt.title.end + (next / total) * 100
+                const delta = newStart - t2.start
+                const len = t2.end - t2.start
+                if (newStart + len > 100 + 1e-6) return
+                const updates: Partial<Record<ElemKey, ElemTiming>> = { title2: { start: newStart, end: newStart + len } }
+                if (tt.cta.start >= t2.start - 1e-6) {
+                  const clen = tt.cta.end - tt.cta.start
+                  const cs = Math.min(tt.cta.start + delta, 100 - clen)
+                  updates.cta = { start: cs, end: cs + clen }
+                }
+                writeTimings(updates)
+              }
+              return { frames, set }
+            })()
 
             return (
               <div className="space-y-4">
                 {/* Layout selector */}
                 <div>
                   <label className="block text-[11px] text-gray-400 mb-2">Copy layout</label>
-                  <div className="grid grid-cols-3 gap-1">
+                  <div className="grid grid-cols-2 gap-1">
                     <button
                       onClick={() => {
                         setCopyLayout("standard")
@@ -2183,15 +2280,77 @@ export default function AdsGenerator() {
                     >
                       Two Frames
                     </button>
+                    <button
+                      onClick={() => {
+                        setCopyLayout("build")
+                        setDuration(5)
+                        if (title2 === "Donec augue mauris") {
+                          setTitle("Empower your people.")
+                          setTitle2("Accelerate your results.")
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-lg text-[11px] transition-colors ${
+                        copyLayout === "build"
+                          ? "bg-primary text-white"
+                          : "bg-sidebar-border text-gray-300 hover:text-white"
+                      }`}
+                    >
+                      Two-line build
+                    </button>
                   </div>
                   <div className="text-[10px] text-gray-500 mt-1.5">
                     {copyLayout === "standard" 
                       ? "Title + Subtitle + CTA with red bar" 
                       : copyLayout === "eyebrow"
                       ? "Eyebrow (highlighted) + Title + CTA"
+                      : copyLayout === "build"
+                      ? "Line 1 enters and holds, then line 2 enters below it + CTA"
                       : "Frame 1 title -> Frame 2 title + CTA"}
                   </div>
                 </div>
+
+                {buildHold && (
+                  <div className="py-2 px-3 rounded-lg bg-sidebar-border">
+                    <div className="flex items-center justify-between gap-2">
+                      <label htmlFor="build-hold" className="text-[12px] font-medium">Hold before line 2</label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label="One frame shorter"
+                          onClick={() => buildHold.set(buildHold.frames - 1)}
+                          disabled={buildHold.frames <= 0}
+                          className="h-6 w-6 rounded text-[13px] text-gray-300 hover:text-white disabled:opacity-40"
+                        >
+                          −
+                        </button>
+                        <input
+                          id="build-hold"
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={buildHold.frames}
+                          onChange={(e) => {
+                            const v = Number(e.target.value)
+                            if (Number.isFinite(v)) buildHold.set(v)
+                          }}
+                          className="w-12 rounded bg-sidebar px-1.5 py-1 text-right font-mono text-[12px] tabular-nums"
+                        />
+                        <span className="font-mono text-[11px] text-gray-400">f</span>
+                        <button
+                          type="button"
+                          aria-label="One frame longer"
+                          onClick={() => buildHold.set(buildHold.frames + 1)}
+                          className="h-6 w-6 rounded text-[13px] text-gray-300 hover:text-white"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-[10px] text-gray-500">
+                      {(buildHold.frames / 25).toFixed(2)}s at 25 fps after line 1 lands. Moves line 2 and the CTA; dragging Line 2 on the timeline changes it too.
+                    </div>
+                  </div>
+                )}
 
                 {/* Sync toggle */}
                 <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-sidebar-border">
@@ -2292,7 +2451,7 @@ export default function AdsGenerator() {
                       : setWrapWidth((prev) => ({ ...prev, [selectedSize]: next }))
                   }
                   headline={activeTitle}
-                  headline2={copyLayout === "two-frame" ? activeTitle2 : ""}
+                  headline2={copyLayout === "two-frame" || copyLayout === "build" ? activeTitle2 : ""}
                   body={activeSubtitle}
                   timings={elemTimings[selectedSize]}
                   totalFrames={duration * FPS}

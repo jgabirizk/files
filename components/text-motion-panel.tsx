@@ -9,7 +9,7 @@ type Scale = { title: number; subtitle: number; cta: number }
 interface Props {
   fontScale: Scale
   setFontScale: (v: Scale) => void
-  copyLayout: "standard" | "eyebrow" | "two-frame"
+  copyLayout: "standard" | "eyebrow" | "two-frame" | "build"
   selectedSize: string
   wordReveal: WordReveal
   setWordReveal: (v: WordReveal) => void
@@ -67,8 +67,8 @@ export function TextMotionPanel({
     const runs =
       effective === "title"
         ? [
-            { text: headline, span: timings.title, name: copyLayout === "two-frame" ? "Frame 1" : "Headline" },
-            ...(headline2 ? [{ text: headline2, span: timings.title2 || { start: 55, end: 67 }, name: "Frame 2" }] : []),
+            { text: headline, span: timings.title, name: copyLayout === "two-frame" ? "Frame 1" : copyLayout === "build" ? "Line 1" : "Headline" },
+            ...(headline2 ? [{ text: headline2, span: timings.title2 || { start: 55, end: 67 }, name: copyLayout === "build" ? "Line 2" : "Frame 2" }] : []),
           ]
         : [{ text: body, span: timings.subtitle, name: "Body" }]
     return runs.map(({ text, span, name }) => {
@@ -81,7 +81,7 @@ export function TextMotionPanel({
   })()
 
   const sliders: { key: "title" | "subtitle"; label: string }[] = [
-    { key: "title", label: copyLayout === "two-frame" ? "Headline wrap (both frames)" : "Headline wrap" },
+    { key: "title", label: copyLayout === "two-frame" ? "Headline wrap (both frames)" : copyLayout === "build" ? "Headline wrap (both lines)" : "Headline wrap" },
     ...(hasBody ? [{ key: "subtitle" as const, label: "Body wrap" }] : []),
   ]
 

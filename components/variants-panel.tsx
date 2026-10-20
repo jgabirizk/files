@@ -12,7 +12,7 @@ export type AdVariant = { id: string; size: string; label: string; copy: Variant
 
 interface Props {
   size: string
-  copyLayout: "standard" | "eyebrow" | "two-frame"
+  copyLayout: "standard" | "eyebrow" | "two-frame" | "build"
   variants: AdVariant[]
   activeId: string | null
   onAdd: () => void
@@ -29,8 +29,9 @@ export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onS
   const active = variants.find((v) => v.id === activeId) ?? null
   const fields: { key: keyof VariantCopy; label: string; rows: number }[] = [
     ...(copyLayout === "eyebrow" ? [{ key: "eyebrowText" as const, label: "Eyebrow", rows: 1 }] : []),
-    { key: "title", label: copyLayout === "two-frame" ? "Headline · frame 1" : "Headline", rows: 2 },
+    { key: "title", label: copyLayout === "two-frame" ? "Headline · frame 1" : copyLayout === "build" ? "Line 1" : "Headline", rows: 2 },
     ...(copyLayout === "two-frame" ? [{ key: "title2" as const, label: "Headline · frame 2", rows: 2 }] : []),
+    ...(copyLayout === "build" ? [{ key: "title2" as const, label: "Line 2", rows: 2 }] : []),
     ...(copyLayout === "standard" ? [{ key: "subtitle" as const, label: "Body", rows: 2 }] : []),
     { key: "ctaText", label: "CTA", rows: 1 },
   ]
