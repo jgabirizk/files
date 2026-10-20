@@ -614,9 +614,11 @@ requestAnimationFrame(function() {
 
 function generate728x90Code(config: ExportConfig): string {
   return `
-    var logoH = (H - redBarHeight - pad * 2) * 0.595;
+    // Sized off the full height, exactly as the editor does. The headline column starts after the logo,
+    // so a smaller logo here would widen the column and break the headline differently from the preview.
+    var logoH = (H - pad * 2) * 0.595;
     var logoW = logoH * (120 / 36.45);
-    var logoY = pad + (H - redBarHeight - pad * 2 - logoH) / 2;
+    var logoY = (H - logoH) / 2;
     if (logoImg.complete) ctx.drawImage(logoImg, pad, logoY, logoW, logoH);
     
     var ctaFontSize = Math.round(H * 0.15 * FS.cta);
@@ -624,7 +626,7 @@ function generate728x90Code(config: ExportConfig): string {
     var ctaBox = ctaLayout(ctaText, W * 0.34);
     var ctaMetrics = { width: ctaBox.widest };
     var triangleGap = ctaFontSize * 0.4;
-    var triangleSize = ctaFontSize * 0.75;
+    var triangleSize = ctaFontSize * 0.70875;
     var ctaBlockW = ctaMetrics.width + triangleGap + triangleSize + pad;
     
     var textX = pad + logoW + pad;
@@ -759,9 +761,13 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
     ctaSizeExpr = "Math.max(10, Math.min(14, W * 0.04))"
   }
   
-  const titleMaxWidthExpr = size === "970x250" 
-    ? `W - pad * 2 - ${redBarWidth} - pad` 
-    : "W - pad * 2"
+  // Same columns as the editor: tall sizes use the full width, the others wrap at two thirds of it.
+  const maxTextWidthExpr = size === "300x600" || size === "160x600"
+    ? "W - pad * 2"
+    : "(W - pad * 2) * (2 / 3)"
+  const titleMaxWidthExpr = size === "970x250"
+    ? `(W - pad * 2 - ${redBarWidth} - pad) * (2 / 3)`
+    : "maxTextWidth"
 
   return `
     var logoHeight = ${logoHeightExpr};
@@ -769,6 +775,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
     if (logoImg.complete) ctx.drawImage(logoImg, pad, pad, logoWidth, logoHeight);
     
     var titleSize = (${titleSizeExpr}) * FS.title;
+    var maxTextWidth = ${maxTextWidthExpr};
     var titleMaxWidth = ${titleMaxWidthExpr};
     var logoBottom = pad + logoHeight;
     var logoToTitleGap = ${logoToTitleGap};
@@ -849,7 +856,8 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
     } else {
       ctx.font = "600 " + titleSize + "px Graphik, sans-serif";
       ctx.fillStyle = txt(titleProgress);
-      var titleLines = wrapText(title, titleMaxWidth);
+      // The editor's standard layout wraps the headline on maxTextWidth, not titleMaxWidth (they differ only on 970x250).
+      var titleLines = wrapText(title, maxTextWidth);
       var vstdTslide = textSlide(titleProgress);
       var titleStartY = logoBottom + logoToTitleGap + vstdTslide[1];
       for (var ti = 0; ti < titleLines.length; ti++) {
@@ -876,7 +884,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
         : size === "970x250" ? `var ctaY = H - pad - ctaSize + vstdCtaSlide[1];`
         : `var ctaY = H - ${redBarHeight} - pad + vstdCtaSlide[1];`}
       var ctaMetrics = drawCta(ctaText, pad + vstdCtaSlide[0], ctaY, W - pad * 2);
-      var triangleSize = ${size === "300x250" || size === "970x250" ? "ctaSize * 0.675" : "ctaSize * 0.75"};
+      var triangleSize = ctaSize * ${size === "300x250" ? 0.6379 : size === "970x250" ? 0.6075 : size === "160x600" ? 0.70875 : 0.675};
       drawTriangle(pad + vstdCtaSlide[0] + ctaMetrics.width + ctaSize * 0.4, ctaY + ctaSize * 0.5, triangleSize, ctaProgress);
     }
   `
