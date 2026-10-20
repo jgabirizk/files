@@ -1073,6 +1073,9 @@ export default function AdsGenerator() {
           : (titleLines.length - 1) * (titleSize + 2) + titleBase
         const blockTop = Math.max(0, (height - redBarHeight - (inkBottom - titleCapTop)) / 2 - titleCapTop)
 
+        // capBox leaves the last measured font (the subtitle's) set, so the
+        // headline font has to be restored before drawing.
+        ctx.font = `600 ${titleSize}px Graphik, sans-serif`
         ctx.fillStyle = txt(titleProgress)
         const [stdTdx, stdTdy] = textSlide(titleProgress)
         const titleY = blockTop + stdTdy

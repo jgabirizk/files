@@ -715,6 +715,8 @@ function generate728x90Code(config: ExportConfig): string {
         : (titleLines.length - 1) * (titleSize + 2) + titleCap[1];
       var blockTop = Math.max(0, (H - redBarHeight - (inkBottom - titleCap[0])) / 2 - titleCap[0]);
       
+      // capBox leaves the subtitle's font set; restore the headline font before drawing.
+      ctx.font = "600 " + titleSize + "px Graphik, sans-serif";
       ctx.fillStyle = txt(titleProgress);
       var stdTslide = textSlide(titleProgress);
       var titleY = blockTop + stdTslide[1];
