@@ -3,9 +3,12 @@
 import type { WordReveal } from "@/lib/motion"
 
 type Span = { start: number; end: number }
-type Wrap = { title: number; subtitle: number }
+type Wrap = { title: number; subtitle: number; cta?: number }
+type Scale = { title: number; subtitle: number; cta: number }
 
 interface Props {
+  fontScale: Scale
+  setFontScale: (v: Scale) => void
   copyLayout: "standard" | "eyebrow" | "two-frame"
   selectedSize: string
   wordReveal: WordReveal
@@ -23,6 +26,8 @@ interface Props {
 const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length
 
 export function TextMotionPanel({
+  fontScale,
+  setFontScale,
   copyLayout,
   selectedSize,
   wordReveal,
@@ -65,7 +70,7 @@ export function TextMotionPanel({
     })
   })()
 
-  const sliders: { key: keyof Wrap; label: string }[] = [
+  const sliders: { key: "title" | "subtitle"; label: string }[] = [
     { key: "title", label: copyLayout === "two-frame" ? "Headline wrap (both frames)" : "Headline wrap" },
     ...(hasBody ? [{ key: "subtitle" as const, label: "Body wrap" }] : []),
   ]
@@ -121,8 +126,52 @@ export function TextMotionPanel({
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
+          <span className="text-[11px] text-gray-400">Font size · {selectedSize}</span>
+          {(fontScale.title !== 100 || fontScale.subtitle !== 100 || fontScale.cta !== 100) && (
+            <button
+              type="button"
+              onClick={() => setFontScale({ title: 100, subtitle: 100, cta: 100 })}
+              className="text-[10px] text-gray-400 underline-offset-2 hover:text-white hover:underline"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+        {(
+          [
+            { key: "title", label: copyLayout === "eyebrow" ? "Headline & eyebrow" : "Headline" },
+            ...(hasBody ? [{ key: "subtitle", label: "Body" }] : []),
+            { key: "cta", label: "CTA & arrow" },
+          ] as { key: keyof Scale; label: string }[]
+        ).map(({ key, label }) => (
+          <div key={key}>
+            <div className="mb-1 flex items-center justify-between">
+              <label htmlFor={`fs-${key}`} className="text-[11px] text-gray-300">
+                {label}
+              </label>
+              <span className="font-mono text-[10px] text-gray-400">{fontScale[key]}%</span>
+            </div>
+            <input
+              id={`fs-${key}`}
+              type="range"
+              min={60}
+              max={160}
+              step={5}
+              value={fontScale[key]}
+              onChange={(e) => setFontScale({ ...fontScale, [key]: +e.target.value })}
+              className="h-1.5 w-full accent-primary"
+            />
+          </div>
+        ))}
+        <p className="text-[10px] leading-relaxed text-gray-500">
+          Percent of this size&apos;s default. Line spacing and the arrow scale with it.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
           <span className="text-[11px] text-gray-400">Text wrap · {selectedSize}</span>
-          {(wrap.title !== 100 || wrap.subtitle !== 100) && (
+          {(wrap.title !== 100 || wrap.subtitle !== 100 || wrap.cta !== undefined) && (
             <button
               type="button"
               onClick={() => setWrap({ title: 100, subtitle: 100 })}
@@ -152,8 +201,43 @@ export function TextMotionPanel({
             />
           </div>
         ))}
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label htmlFor="wrap-cta" className="text-[11px] text-gray-300">
+              CTA wrap
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-gray-400">
+                {wrap.cta === undefined ? "Off · one line" : `${wrap.cta}% of column`}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={wrap.cta !== undefined}
+                aria-label="Wrap the CTA by width"
+                onClick={() => setWrap({ ...wrap, cta: wrap.cta === undefined ? 100 : undefined })}
+                className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${wrap.cta !== undefined ? "bg-primary" : "bg-sidebar-border"}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-sidebar-foreground transition-transform ${wrap.cta !== undefined ? "translate-x-3" : "translate-x-0"}`}
+                />
+              </button>
+            </div>
+          </div>
+          <input
+            id="wrap-cta"
+            type="range"
+            min={30}
+            max={100}
+            step={5}
+            disabled={wrap.cta === undefined}
+            value={wrap.cta ?? 100}
+            onChange={(e) => setWrap({ ...wrap, cta: +e.target.value })}
+            className="h-1.5 w-full accent-primary disabled:opacity-40"
+          />
+        </div>
         <p className="text-[10px] leading-relaxed text-gray-500">
-          Press Enter in a copy field to force a line break. Narrower widths wrap earlier; each size keeps its own setting.
+          Press Enter in a copy field (CTA included) to force a line break. Extra CTA lines stack upward and the arrow follows the last line. Narrower widths wrap earlier; each size keeps its own setting.
           {selectedSize === "728x90" && " The 728×90 keeps copy on one line, so only forced breaks change it there."}
         </p>
       </div>

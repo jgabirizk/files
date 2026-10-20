@@ -101,12 +101,18 @@ interface ExportConfig {
   layoutType?: "red-bar" | "red-block"
   showRedBar?: boolean
   wordReveal?: WordReveal
-  wrapWidth?: Partial<Record<AdSize, { title: number; subtitle: number }>>
+  wrapWidth?: Partial<Record<AdSize, { title: number; subtitle: number; cta?: number }>>
   /** Which sizes to export; omitted or empty means all. */
   sizes?: AdSize[]
   textColor?: string
   ctaColor?: string
   ctaArrowColor?: string
+  /** false draws the red bar / block in place from frame 0 */
+  animateRedBar?: boolean
+  /** Font size per size, as a percentage of the layout default */
+  fontScale?: Partial<Record<AdSize, FontScale>>
+  /** Extra copies of a size; each exports as its own zip */
+  variants?: ExportVariant[]
   /** Real-font advance widths, filled by exportAllSizes so the ad breaks lines exactly as the preview did. */
   advances?: AdvanceTable
   /** Vector outlines of the copy, drawn instead of a font file */
@@ -120,8 +126,21 @@ export const TARGET_DPI = 150
 const DPI_SCALE = TARGET_DPI / 96
 const MIN_QUALITY = 0.35
 
+export type FontScale = { title: number; subtitle: number; cta: number }
+export type VariantCopy = { title: string; subtitle: string; eyebrow: string; title2: string; cta: string }
+export type ExportVariant = { size: AdSize; label: string; copy: VariantCopy }
+
+const fontScaleFor = (config: ExportConfig, size: AdSize) => {
+  const f = config.fontScale?.[size]
+  return { title: (f?.title ?? 100) / 100, subtitle: (f?.subtitle ?? 100) / 100, cta: (f?.cta ?? 100) / 100 }
+}
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "variant"
+
 export type ExportReport = {
   size: AdSize
+  /** Variant name; absent for the base copy */
+  label?: string
   zipBytes: number
   /** JPEG quality the budget allowed, or null when the ad carries no image */
   quality: number | null
@@ -354,6 +373,8 @@ var WRAP = ${JSON.stringify(config.wrapWidth?.[size] || { title: 100, subtitle: 
 var WORD_FRAMES = ${WORD_ENTRANCE_FRAMES}, WORD_STAGGER = ${WORD_STAGGER_FRAMES}, FPS_ = ${FPS};
 var NOW_PROGRESS = 0;
 var SHOW_RED_BAR = ${config.showRedBar === false ? "false" : "true"};
+var ANIMATE_RED_BAR = ${config.animateRedBar === false ? "false" : "true"};
+var FS = ${JSON.stringify(fontScaleFor(config, size))};
 function txt(a) { return hexToRgba(TEXT_COLOR, a); }
 function ctaTxt(a) { return hexToRgba(CTA_COLOR, a); }
 
@@ -389,6 +410,32 @@ function wrapText(text, maxWidth, key) {
   }
   return lines;
 }
+
+// CTA: Enter forces a break; it only wraps by width once the CTA wrap slider is set.
+// Extra lines stack above the baseline, so the CTA keeps its anchor and the arrow follows the last line.
+function ctaLayout(text, maxW) {
+  var limit = WRAP.cta == null ? Infinity : maxW * WRAP.cta / 100;
+  var lines = [];
+  var paragraphs = text.split("\\n");
+  for (var p = 0; p < paragraphs.length; p++) {
+    var words = splitWords(paragraphs[p]);
+    var current = "";
+    for (var i = 0; i < words.length; i++) {
+      var test = current ? current + " " + words[i] : words[i];
+      if (breakWidth(test) > limit && current) { lines.push(current); current = words[i]; } else { current = test; }
+    }
+    lines.push(current);
+  }
+  var px = parseFloat((/(\\d+(?:\\.\\d+)?)px/.exec(ctx.font) || [0, "12"])[1]);
+  var widths = lines.map(function(l) { return ctx.measureText(l).width; });
+  return { lines: lines, lh: px * 1.15, widest: Math.max.apply(null, widths.concat([0])), last: widths[widths.length - 1] || 0 };
+}
+function paintCtaLines(box, x, y, anchor) {
+  var n = box.lines.length, shift = anchor === "center" ? (n - 1) * box.lh / 2 : 0;
+  for (var i = 0; i < n; i++) ctx.fillText(box.lines[i], x, y - (n - 1 - i) * box.lh + shift);
+  return y + shift;
+}
+function drawCta(text, x, y, maxW) { var b = ctaLayout(text, maxW); paintCtaLines(b, x, y, "bottom"); return { width: b.last }; }
 
 // Word-by-word reveal: 13f entrance per word, 2f apart, 12px drop from above.
 function drawCopyLine(key, lines, i, line, x, y, maxW) {
@@ -524,7 +571,7 @@ function startAnimation() {
     var redBarTiming = timing[redBarTimingKey] || timing.redBar;
     var redBarDelay = redBarTiming.start / 100;
     var redBarDur = Math.max(0.01, (redBarTiming.end - redBarTiming.start) / 100);
-    var redBarProgress = easeStandard(Math.max(0, Math.min(1, (progress - redBarDelay) / redBarDur)));
+    var redBarProgress = !ANIMATE_RED_BAR ? 1 : easeStandard(Math.max(0, Math.min(1, (progress - redBarDelay) / redBarDur)));
     
     ctx.fillStyle = "#CC0000";
     if (SHOW_RED_BAR) {
@@ -572,9 +619,10 @@ function generate728x90Code(config: ExportConfig): string {
     var logoY = pad + (H - redBarHeight - pad * 2 - logoH) / 2;
     if (logoImg.complete) ctx.drawImage(logoImg, pad, logoY, logoW, logoH);
     
-    var ctaFontSize = Math.round(H * 0.15);
+    var ctaFontSize = Math.round(H * 0.15 * FS.cta);
     ctx.font = "500 " + ctaFontSize + "px Graphik, sans-serif";
-    var ctaMetrics = ctx.measureText(ctaText);
+    var ctaBox = ctaLayout(ctaText, W * 0.34);
+    var ctaMetrics = { width: ctaBox.widest };
     var triangleGap = ctaFontSize * 0.4;
     var triangleSize = ctaFontSize * 0.75;
     var ctaBlockW = ctaMetrics.width + triangleGap + triangleSize + pad;
@@ -590,7 +638,7 @@ function generate728x90Code(config: ExportConfig): string {
     var frame2Alpha = title2Progress728;
     
     if (copyLayout === "two-frame") {
-      var titleSize = Math.round(H * 0.26);
+      var titleSize = Math.round(H * 0.26 * FS.title);
       var availableH = H - redBarHeight;
       var textY = (availableH - titleSize) / 2;
       
@@ -604,7 +652,7 @@ function generate728x90Code(config: ExportConfig): string {
       drawCopyLine("title2", [title2], 0, title2, textX + t2slide[0], textY + t2slide[1]);
       
     } else if (copyLayout === "eyebrow") {
-      var titleSize = Math.round(H * 0.26);
+      var titleSize = Math.round(H * 0.26 * FS.title);
       var eyebrowSize = Math.round(H * 0.18);
       var eyebrowPadH = eyebrowSize * 0.2;
       var eyebrowPadV = eyebrowSize * 0.1;
@@ -636,7 +684,7 @@ function generate728x90Code(config: ExportConfig): string {
       }
       
     } else {
-      var titleSize = Math.round(H * 0.26);
+      var titleSize = Math.round(H * 0.26 * FS.title);
       ctx.font = "600 " + titleSize + "px Graphik, sans-serif";
       ctx.fillStyle = txt(titleProgress);
       var stdTslide = textSlide(titleProgress);
@@ -647,7 +695,7 @@ function generate728x90Code(config: ExportConfig): string {
       }
       var titleBottom = titleY + titleLines.length * (titleSize + 2);
       
-      var subtitleSize = Math.round(H * 0.21);
+      var subtitleSize = Math.round(H * 0.21 * FS.subtitle);
       ctx.font = '500 ' + subtitleSize + 'px "Reckless Neue", serif';
       ctx.fillStyle = txt(subtitleProgress);
       var stdSslide = textSlide(subtitleProgress);
@@ -664,8 +712,8 @@ function generate728x90Code(config: ExportConfig): string {
     var ctaX = W - pad - totalCtaW;
     var ctaSlide = textSlide(ctaProgress);
     var ctaY = (H - redBarHeight) / 2 - ctaFontSize / 2 + ctaSlide[1];
-    ctx.fillText(ctaText, ctaX + ctaSlide[0], ctaY);
-    drawTriangle(ctaX + ctaSlide[0] + ctaMetrics.width + triangleGap, ctaY + ctaFontSize * 0.5, triangleSize, ctaProgress);
+    var ctaLastY = paintCtaLines(ctaBox, ctaX + ctaSlide[0], ctaY, "center");
+    drawTriangle(ctaX + ctaSlide[0] + ctaBox.last + triangleGap, ctaLastY + ctaFontSize * 0.5, triangleSize, ctaProgress);
   `
 }
 
@@ -720,11 +768,11 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
     var logoWidth = logoHeight * (120 / 36.45);
     if (logoImg.complete) ctx.drawImage(logoImg, pad, pad, logoWidth, logoHeight);
     
-    var titleSize = ${titleSizeExpr};
+    var titleSize = (${titleSizeExpr}) * FS.title;
     var titleMaxWidth = ${titleMaxWidthExpr};
     var logoBottom = pad + logoHeight;
     var logoToTitleGap = ${logoToTitleGap};
-    var ctaSize = ${ctaSizeExpr};
+    var ctaSize = (${ctaSizeExpr}) * FS.cta;
     
     var title1OutTiming = timing.title1out || { start: 40, end: 52 };
     var title2Timing = timing.title2 || { start: 55, end: 67 };
@@ -759,8 +807,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
       ${size === "160x600" || size === "300x600" ? `var ctaY = titlesBottom + 12 + ctaSlide[1];`
         : size === "970x250" ? `var ctaY = H - pad - ctaSize + ctaSlide[1];`
         : `var ctaY = H - ${redBarHeight} - pad + ctaSlide[1];`}
-      ctx.fillText(ctaText, pad + ctaSlide[0], ctaY);
-      var ctaMetrics = ctx.measureText(ctaText);
+      var ctaMetrics = drawCta(ctaText, pad + ctaSlide[0], ctaY, W - pad * 2);
       var triangleSize = ctaSize * 0.75;
       drawTriangle(pad + ctaSlide[0] + ctaMetrics.width + ctaSize * 0.4, ctaY + ctaSize * 0.5, triangleSize, ctaProgress);
       
@@ -795,8 +842,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
       ctx.fillStyle = ctaTxt(ctaProgress);
       var ctaSlide = textSlide(ctaProgress);
       ${size === "970x250" ? `var ctaY = H - pad - ctaSize + ctaSlide[1];` : `var ctaY = titleBottom + 12 + ctaSlide[1];`}
-      ctx.fillText(ctaText, pad + ctaSlide[0], ctaY);
-      var ctaMetrics = ctx.measureText(ctaText);
+      var ctaMetrics = drawCta(ctaText, pad + ctaSlide[0], ctaY, W - pad * 2);
       var triangleSize = ctaSize * 0.75;
       drawTriangle(pad + ctaSlide[0] + ctaMetrics.width + ctaSize * 0.4, ctaY + ctaSize * 0.5, triangleSize, ctaProgress);
       
@@ -811,7 +857,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
       }
       var titleBottom = titleStartY + titleLines.length * (titleSize + 4);
       
-      var subtitleSize = ${size === "160x600" ? "titleSize * 0.9" : "titleSize * 0.85"};
+      var subtitleSize = (${size === "160x600" ? "titleSize * 0.9" : "titleSize * 0.85"}) * (FS.subtitle / FS.title);
       ctx.font = '500 ' + subtitleSize + 'px "Reckless Neue", serif';
       ctx.fillStyle = txt(subtitleProgress);
       var vstdSslide = textSlide(subtitleProgress);
@@ -829,8 +875,7 @@ function generateVerticalCode(size: AdSize, config: ExportConfig): string {
         : size === "300x600" ? `var ctaY = subtitleBottom + 15 + vstdCtaSlide[1];`
         : size === "970x250" ? `var ctaY = H - pad - ctaSize + vstdCtaSlide[1];`
         : `var ctaY = H - ${redBarHeight} - pad + vstdCtaSlide[1];`}
-      ctx.fillText(ctaText, pad + vstdCtaSlide[0], ctaY);
-      var ctaMetrics = ctx.measureText(ctaText);
+      var ctaMetrics = drawCta(ctaText, pad + vstdCtaSlide[0], ctaY, W - pad * 2);
       var triangleSize = ${size === "300x250" || size === "970x250" ? "ctaSize * 0.675" : "ctaSize * 0.75"};
       drawTriangle(pad + vstdCtaSlide[0] + ctaMetrics.width + ctaSize * 0.4, ctaY + ctaSize * 0.5, triangleSize, ctaProgress);
     }
@@ -859,11 +904,11 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
   const imageFiles = loaded.map((l) => l.name)
 
   const copy = [config.title, config.subtitle, config.eyebrowText, config.title2, config.ctaText]
-  for (const o of Object.values(config.copyOverrides || {})) copy.push(...Object.values(o || {}).filter((v): v is string => typeof v === "string"))
+  for (const o of [...Object.values(config.copyOverrides || {}), ...(config.variants || []).map((v) => v.copy)]) copy.push(...Object.values(o || {}).filter((v): v is string => typeof v === "string"))
   // Group every piece of copy by the face it is set in, so each face carries only the glyphs it draws.
   const byField = (field: "title" | "title2" | "subtitle" | "eyebrow" | "cta", base: string) => [
     base,
-    ...Object.values(config.copyOverrides || {}).map((o) => (o as Record<string, unknown> | undefined)?.[field]).filter((v): v is string => typeof v === "string"),
+    ...[...Object.values(config.copyOverrides || {}), ...(config.variants || []).map((v) => v.copy)].map((o) => (o as Record<string, unknown> | undefined)?.[field]).filter((v): v is string => typeof v === "string"),
   ]
   const glyphs = await buildGlyphTable({
     "600|Graphik": [...byField("title", config.title), ...byField("title2", config.title2)],
@@ -872,7 +917,16 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
   })
   config = { ...config, advances: await buildAdvanceTable(copy), glyphs }
 
-  for (const size of sizes) {
+  const base = config
+  const jobs = [
+    ...sizes.map((size) => ({ size, label: undefined as string | undefined, cfg: base })),
+    ...(base.variants || [])
+      .filter((v) => sizes.includes(v.size))
+      .map((v) => ({ size: v.size, label: v.label, cfg: { ...base, copyOverrides: { ...base.copyOverrides, [v.size]: v.copy } } })),
+  ]
+  for (const job of jobs) {
+    const { size, label } = job
+    const config = job.cfg
     const html = generateHTML(size, config.clickUrl, config, imageFiles)
     const js = generateAnimationJS(size, config, imageFiles)
 
@@ -905,6 +959,7 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
 
     reports.push({
       size,
+      label,
       zipBytes: zipped.length,
       quality,
       dpi: images.length ? Math.round(96 * scale) : null,
@@ -916,7 +971,7 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `bain-ad-${size}.zip`
+    a.download = `bain-ad-${size}${label ? "-" + slug(label) : ""}.zip`
     a.click()
     URL.revokeObjectURL(url)
     

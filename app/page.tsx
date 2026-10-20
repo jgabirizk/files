@@ -5,8 +5,10 @@ import { exportAllSizes, type ExportReport } from "@/lib/export-ads"
 import { encodeGif, GIF_CAPTURE_FPS } from "@/lib/export-gif"
 import JSZip from "jszip"
 
-type GifReportRow = { size: string; bytes: number; fps: number; colors: number }
+type GifReportRow = { size: string; label?: string; bytes: number; fps: number; colors: number }
 import { TextMotionPanel } from "@/components/text-motion-panel"
+import { VariantsPanel, type AdVariant, type VariantCopy } from "@/components/variants-panel"
+import { proportionalCrop } from "@/lib/auto-crop"
 import { breakWidth, CANVAS_SCALE } from "@/lib/text-metrics"
 import { easeStandard, easeEntrance, easeExit, TEXT_SLIDE_PX, nearestToken, MAX_MOVE_FRAMES, FPS, WORD_ENTRANCE_FRAMES, WORD_STAGGER_FRAMES, wordRevealFrames, type WordReveal } from "@/lib/motion"
 import { TimelinePanel, type TimelineTrack } from "@/components/timeline-panel"
@@ -153,6 +155,8 @@ const DEFAULT_TIMING_TWO_FRAME: SizeTiming = framesToTiming(250, {
 
 const DEFAULT_BG_TIMING: ElemTiming = { start: 0, end: 27.2 }
 
+type FontScale = { title: number; subtitle: number; cta: number }
+
 export default function AdsGenerator() {
   const [selectedSize, setSelectedSize] = useState<AdSize>("300x250")
   const [backgroundImage, setBackgroundImage] = useState<string | null>(null)
@@ -217,6 +221,21 @@ export default function AdsGenerator() {
   const startTimeRef = useRef<number>(0)
   const progressRef = useRef<number>(1)
   const bgImageRef = useRef<HTMLImageElement | null>(null)
+  const autoCropAllFromSelected = () => {
+    const img = bgImageRef.current
+    if (!img || !img.naturalWidth) return
+    const src = AD_SIZES[selectedSize]
+    const from = { w: src.width, h: src.height, crop: crops[selectedSize] }
+    const dims = { w: img.naturalWidth, h: img.naturalHeight }
+    setCrops((prev) => {
+      const next = { ...prev }
+      for (const size of Object.keys(AD_SIZES) as AdSize[]) {
+        if (size === selectedSize) continue
+        next[size] = proportionalCrop(dims, from, { w: AD_SIZES[size].width, h: AD_SIZES[size].height })
+      }
+      return next
+    })
+  }
   const logoImageRef = useRef<HTMLImageElement | null>(null)
   const layerImagesRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const drawCanvasRef = useRef<(progress: number) => void>(() => {})
@@ -227,7 +246,7 @@ export default function AdsGenerator() {
   // Word-by-word reveal is ONE choice so headline and body can never both use it.
   const [wordReveal, setWordReveal] = useState<WordReveal>("none")
   // Wrap width as a percentage of the available text column, per size and element.
-  const [wrapWidth, setWrapWidth] = useState<Partial<Record<AdSize, { title: number; subtitle: number }>>>({})
+  const [wrapWidth, setWrapWidth] = useState<Partial<Record<AdSize, { title: number; subtitle: number; cta?: number }>>>({})
   const [exportQuality, setExportQuality] = useState(0.92)
   const [showExportModal, setShowExportModal] = useState(false)
   // Which sizes the ZIP and GIF exports produce. One list governs both.
@@ -239,6 +258,15 @@ export default function AdsGenerator() {
     setExportSizes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
   const [layoutType, setLayoutType] = useState<"red-bar" | "red-block">("red-bar")
   const [showRedBar, setShowRedBar] = useState(true)
+  const [animateRedBar, setAnimateRedBar] = useState(true)
+  const [fontScale, setFontScale] = useState<Partial<Record<AdSize, FontScale>>>({})
+  const [variants, setVariants] = useState<AdVariant[]>([])
+  const [activeVariantId, setActiveVariantId] = useState<string | null>(null)
+  const [viewAll, setViewAll] = useState(false)
+  // Canvases in the all-sizes grid, keyed by size or variant id
+  const gridCanvasRef = useRef(new Map<string, { canvas: HTMLCanvasElement; size: AdSize; variantId: string | null }>())
+  // Draws any size/variant onto any canvas — used by the grid and the GIF export
+  const drawAnyRef = useRef<(p: number, size: AdSize, canvas: HTMLCanvasElement, variantId: string | null) => void>(() => {})
   const [textColor, setTextColor] = useState("#FFFFFF")
   const [ctaColor, setCtaColor] = useState("#FFFFFF")
   const [ctaArrowColor, setCtaArrowColor] = useState("#FFFFFF")
@@ -309,6 +337,10 @@ export default function AdsGenerator() {
     setExportQuality(0.92)
     setLayoutType("red-bar")
     setShowRedBar(true)
+    setAnimateRedBar(true)
+    setFontScale({})
+    setVariants([])
+    setActiveVariantId(null)
     setTextColor("#FFFFFF")
     setCtaColor("#FFFFFF")
     setCtaArrowColor("#FFFFFF")
@@ -324,6 +356,7 @@ export default function AdsGenerator() {
     shadows, bgAnimation, timingSynced, textDirection, elemTimings,
     copyOverrides, crops, duration, wordReveal, wrapWidth, exportQuality,
     layoutType, showRedBar, textColor, ctaColor, ctaArrowColor, redBlockExtend,
+    animateRedBar, fontScale, variants,
   })
   type ProjectState = ReturnType<typeof projectSnapshot>
 
@@ -339,16 +372,17 @@ export default function AdsGenerator() {
     const sizes = orderedExportSizes
     if (sizes.length === 0) return
     try {
-      for (const [n, size] of sizes.entries()) {
-        setGifStatus({ busy: true, text: `Rendering ${size} (${n + 1} of ${sizes.length})` })
-        setSelectedSize(size)
+      const jobs = [
+        ...sizes.map((size) => ({ size, variantId: null as string | null, label: undefined as string | undefined })),
+        ...variants.filter((v) => sizes.includes(v.size as AdSize)).map((v) => ({ size: v.size as AdSize, variantId: v.id as string | null, label: v.label as string | undefined })),
+      ]
+      for (const [n, { size, variantId, label }] of jobs.entries()) {
+        const name = label ? `${size} · ${label}` : size
+        setGifStatus({ busy: true, text: `Rendering ${name} (${n + 1} of ${jobs.length})` })
         const { width: w, height: h } = AD_SIZES[size]
-        let canvas = canvasRef.current
-        for (let tries = 0; tries < 20 && (!canvas || canvas.width !== w * CANVAS_SCALE || canvas.height !== h * CANVAS_SCALE); tries++) {
-          await settle()
-          canvas = canvasRef.current
-        }
-        if (!canvas || canvas.width !== w * CANVAS_SCALE) throw new Error(`The preview did not switch to ${size}`)
+        const canvas = document.createElement("canvas")
+        canvas.width = w * CANVAS_SCALE
+        canvas.height = h * CANVAS_SCALE
         await settle()
 
         const off = document.createElement("canvas")
@@ -359,18 +393,19 @@ export default function AdsGenerator() {
         const total = Math.max(2, Math.round(duration * GIF_CAPTURE_FPS) + 1)
         const frames: Uint8ClampedArray[] = []
         for (let i = 0; i < total; i++) {
-          drawCanvasRef.current(i / (total - 1))
+          drawAnyRef.current(i / (total - 1), size, canvas, variantId)
           octx.clearRect(0, 0, w, h)
           octx.drawImage(canvas, 0, 0, w, h)
           frames.push(octx.getImageData(0, 0, w, h).data)
           if (i % 10 === 0) await new Promise((r) => setTimeout(r, 0))
         }
 
-        setGifStatus({ busy: true, text: `Encoding ${size} (${n + 1} of ${sizes.length})` })
+        setGifStatus({ busy: true, text: `Encoding ${name} (${n + 1} of ${jobs.length})` })
         await new Promise((r) => setTimeout(r, 0))
         const gif = encodeGif(frames, w, h)
-        zip.file(`${size}.gif`, gif.bytes)
-        report.push({ size, bytes: gif.bytes.length, fps: gif.fps, colors: gif.colors })
+        const slug = label ? "-" + label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : ""
+        zip.file(`${size}${slug}.gif`, gif.bytes)
+        report.push({ size, label, bytes: gif.bytes.length, fps: gif.fps, colors: gif.colors })
       }
       const blob = await zip.generateAsync({ type: "blob" })
       const a = document.createElement("a")
@@ -431,6 +466,10 @@ export default function AdsGenerator() {
     if (s.exportQuality !== undefined) setExportQuality(s.exportQuality)
     if (s.layoutType !== undefined) setLayoutType(s.layoutType)
     if (s.showRedBar !== undefined) setShowRedBar(s.showRedBar)
+    if (s.animateRedBar !== undefined) setAnimateRedBar(s.animateRedBar)
+    if (s.fontScale !== undefined) setFontScale(s.fontScale)
+    if (s.variants !== undefined) setVariants(s.variants)
+    setActiveVariantId(null)
     if (s.textColor !== undefined) setTextColor(s.textColor)
     if (s.ctaColor !== undefined) setCtaColor(s.ctaColor)
     if (s.ctaArrowColor !== undefined) setCtaArrowColor(s.ctaArrowColor)
@@ -450,6 +489,13 @@ export default function AdsGenerator() {
     return { title: ov.title, subtitle: ov.subtitle, eyebrowText: ov.eyebrowText, title2: ov.title2, ctaText: ov.ctaText }
   }
   const { title: activeTitle, subtitle: activeSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = effectiveCopy(selectedSize)
+  const currentSize = selectedSize
+  const sizeVariants = variants.filter((v) => v.size === selectedSize)
+  const activeVariant = sizeVariants.find((v) => v.id === activeVariantId) ?? null
+  const copyFor = (size: AdSize, variantId: string | null): VariantCopy => {
+    const v = variantId ? variants.find((x) => x.id === variantId && x.size === size) : undefined
+    return v ? v.copy : effectiveCopy(size)
+  }
 
   // Preload background image
   useEffect(() => {
@@ -527,8 +573,10 @@ export default function AdsGenerator() {
   }
 
   // Draw canvas - synchronous for smooth animation
-  const drawCanvas = useCallback((animProgress: number) => {
-    const canvas = canvasRef.current
+  const drawCanvas = useCallback((animProgress: number, sizeArg?: AdSize, canvasArg?: HTMLCanvasElement | null, variantArg?: string | null) => {
+    const selectedSize = sizeArg ?? currentSize
+    const { width, height } = AD_SIZES[selectedSize]
+    const canvas = canvasArg ?? canvasRef.current
     if (!canvas) return
     
     const ctx = canvas.getContext("2d")
@@ -679,10 +727,15 @@ export default function AdsGenerator() {
     }
     
     // Draw overlay elements
-    drawOverlay(ctx, animProgress)
-  }, [width, height, activeTitle, activeSubtitle, activeEyebrow, activeTitle2, activeCtaText, crops, selectedSize, copyOverrides, shadows, bgAnimation, elemTimings, copyLayout, bgMode, layers, textDirection, layoutType, redBlockExtend, showRedBar, textColor, ctaColor, ctaArrowColor, wordReveal, wrapWidth, duration])
+    drawOverlay(ctx, animProgress, selectedSize, variantArg === undefined ? activeVariantId : variantArg)
+  }, [width, height, activeTitle, activeSubtitle, activeEyebrow, activeTitle2, activeCtaText, crops, selectedSize, copyOverrides, shadows, bgAnimation, elemTimings, copyLayout, bgMode, layers, textDirection, layoutType, redBlockExtend, showRedBar, textColor, ctaColor, ctaArrowColor, wordReveal, wrapWidth, duration, title, subtitle, eyebrowText, title2, ctaText, variants, activeVariantId, fontScale, animateRedBar])
 
-  const drawOverlay = useCallback((ctx: CanvasRenderingContext2D, animProgress: number) => {
+  const drawOverlay = useCallback((ctx: CanvasRenderingContext2D, animProgress: number, sizeArg?: AdSize, variantArg?: string | null) => {
+    const selectedSize = sizeArg ?? currentSize
+    const { width, height } = AD_SIZES[selectedSize]
+    const { title: activeTitle, subtitle: activeSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
+    const fsRaw = fontScale[selectedSize]
+    const FS = { title: (fsRaw?.title ?? 100) / 100, subtitle: (fsRaw?.subtitle ?? 100) / 100, cta: (fsRaw?.cta ?? 100) / 100 }
     const padding = AD_PADDING[selectedSize]
     
     // Shadow overlay gradient - driven by shadow config
@@ -748,7 +801,7 @@ export default function AdsGenerator() {
       const redBarTiming = t[redBarTimingKey] || t.redBar
       const redBarDelay = redBarTiming.start / 100
       const redBarDuration = Math.max(0.01, (redBarTiming.end - redBarTiming.start) / 100)
-      const redBarProgress = easeStandard(Math.max(0, Math.min(1, (animProgress - redBarDelay) / redBarDuration)))
+      const redBarProgress = !animateRedBar ? 1 : easeStandard(Math.max(0, Math.min(1, (animProgress - redBarDelay) / redBarDuration)))
 
       if (selectedSize === "970x250") {
         const redBarH = height * redBarProgress
@@ -765,7 +818,7 @@ export default function AdsGenerator() {
       const redBlockTiming = t.redBar || { start: 0, end: 35 }
       const redBlockDelay = redBlockTiming.start / 100
       const redBlockDuration = Math.max(0.01, (redBlockTiming.end - redBlockTiming.start) / 100)
-      const redBlockProgress = easeStandard(Math.max(0, Math.min(1, (animProgress - redBlockDelay) / redBlockDuration)))
+      const redBlockProgress = !animateRedBar ? 1 : easeStandard(Math.max(0, Math.min(1, (animProgress - redBlockDelay) / redBlockDuration)))
 
       ctx.fillStyle = "#CC0000"
 
@@ -807,7 +860,7 @@ export default function AdsGenerator() {
 
     // Helper: wrap text to max width, returns array of lines
     // Enter in a copy field forces a break; the wrap-width slider narrows the column.
-    const sizeWrap = wrapWidth[selectedSize] || { title: 100, subtitle: 100 }
+    const sizeWrap: { title: number; subtitle: number; cta?: number } = wrapWidth[selectedSize] || { title: 100, subtitle: 100 }
     const wrapText = (text: string, maxWidth: number, key: "title" | "subtitle" = "title"): string[] => {
       const limit = maxWidth * (sizeWrap[key] / 100)
       const lines: string[] = []
@@ -826,6 +879,40 @@ export default function AdsGenerator() {
         lines.push(current)
       }
       return lines
+    }
+
+    // CTA: Enter forces a break; the CTA wrap slider (off by default) wraps by width.
+    // Extra lines stack upward so the bottom line keeps its place; the arrow follows the last line.
+    const ctaLayout = (text: string, maxW: number) => {
+      const limit = sizeWrap.cta === undefined ? Infinity : maxW * (sizeWrap.cta / 100)
+      const lines: string[] = []
+      for (const paragraph of text.split("\n")) {
+        let current = ""
+        for (const word of paragraph.split(" ").filter(Boolean)) {
+          const test = current ? current + " " + word : word
+          if (breakWidth(ctx, test) > limit && current) {
+            lines.push(current)
+            current = word
+          } else {
+            current = test
+          }
+        }
+        lines.push(current)
+      }
+      const px = parseFloat(/(\d+(?:\.\d+)?)px/.exec(ctx.font)?.[1] ?? "12")
+      const widths = lines.map((l) => ctx.measureText(l).width)
+      return { lines, lh: px * 1.15, widest: Math.max(0, ...widths), last: widths[widths.length - 1] ?? 0 }
+    }
+    const paintCtaLines = (box: ReturnType<typeof ctaLayout>, x: number, y: number, anchor: "bottom" | "center") => {
+      const n = box.lines.length
+      const shift = anchor === "center" ? ((n - 1) * box.lh) / 2 : 0
+      box.lines.forEach((l, i) => ctx.fillText(l, x, y - (n - 1 - i) * box.lh + shift))
+      return y + shift
+    }
+    const drawCta = (x: number, y: number, maxW: number) => {
+      const box = ctaLayout(activeCtaText, maxW)
+      paintCtaLines(box, x, y, "bottom")
+      return { width: box.last }
     }
 
     // Draws one line of headline/body copy. Under word reveal each word enters on
@@ -879,9 +966,10 @@ export default function AdsGenerator() {
       }
 
       // Reserve space for CTA on the right before drawing title
-      const ctaFontSize = Math.round(height * 0.15)
+      const ctaFontSize = Math.round(height * 0.15 * FS.cta)
       ctx.font = `500 ${ctaFontSize}px Graphik, sans-serif`
-      const ctaMetrics = ctx.measureText(activeCtaText)
+      const ctaBox = ctaLayout(activeCtaText, width * 0.34)
+      const ctaMetrics = { width: ctaBox.widest }
       const triangleGap = ctaFontSize * 0.4
       const triangleSize = ctaFontSize * 0.70875
       const ctaBlockW = ctaMetrics.width + triangleGap + triangleSize + padding
@@ -903,7 +991,7 @@ export default function AdsGenerator() {
 
       if (copyLayout === "two-frame") {
         // --- 728x90 TWO-FRAME LAYOUT ---
-        const titleSize = Math.round(height * 0.26)
+        const titleSize = Math.round(height * 0.26 * FS.title)
 
         // Vertically center a single line of text above the red bar
         const availableH = height - redBarHeight
@@ -923,8 +1011,8 @@ export default function AdsGenerator() {
 
       } else if (copyLayout === "eyebrow") {
         // --- 728x90 EYEBROW LAYOUT ---
-        const titleSize = Math.round(height * 0.26)
-        const eyebrowSize = Math.round(height * 0.18)
+        const titleSize = Math.round(height * 0.26 * FS.title)
+        const eyebrowSize = Math.round(height * 0.18 * FS.title)
         const eyebrowPadH = eyebrowSize * 0.2
         const eyebrowPadV = eyebrowSize * 0.1
         const eyebrowBlockH = eyebrowSize + eyebrowPadV * 2
@@ -958,7 +1046,7 @@ export default function AdsGenerator() {
       } else {
         // --- 728x90 STANDARD LAYOUT ---
         // Title with wrap
-        const titleSize = Math.round(height * 0.26)
+        const titleSize = Math.round(height * 0.26 * FS.title)
         ctx.font = `600 ${titleSize}px Graphik, sans-serif`
         ctx.fillStyle = txt(titleProgress)
         const [stdTdx, stdTdy] = textSlide(titleProgress)
@@ -968,7 +1056,7 @@ export default function AdsGenerator() {
         const titleBottom = titleY + titleLines.length * (titleSize + 2)
 
         // Subtitle with wrap
-        const subtitleSize = Math.round(height * 0.21)
+        const subtitleSize = Math.round(height * 0.21 * FS.subtitle)
         ctx.font = `500 ${subtitleSize}px "Reckless Neue", serif`
         ctx.fillStyle = txt(subtitleProgress)
         const [stdSdx, stdSdy] = textSlide(subtitleProgress)
@@ -984,8 +1072,8 @@ export default function AdsGenerator() {
       const ctaX = width - padding - totalCtaW
       const [cta728dx, cta728dy] = textSlide(ctaProgress)
       const ctaY = (height - redBarHeight) / 2 - ctaFontSize / 2 + cta728dy
-      ctx.fillText(activeCtaText, ctaX + cta728dx, ctaY)
-      drawTriangle(ctaX + cta728dx + ctaMetrics.width + triangleGap, ctaY + ctaFontSize * 0.5, triangleSize, ctaProgress)
+      const ctaLastY = paintCtaLines(ctaBox, ctaX + cta728dx, ctaY, "center")
+      drawTriangle(ctaX + cta728dx + ctaBox.last + triangleGap, ctaLastY + ctaFontSize * 0.5, triangleSize, ctaProgress)
     } else {
       // --- All other sizes: vertical stacked layout (Red Bar) ---
       // Tall vertical sizes (300x600, 160x600) use full width; others wrap at 2/3 by default
@@ -1019,13 +1107,13 @@ export default function AdsGenerator() {
       // Title sizing per format
       let titleSize: number
       if (selectedSize === "160x600") {
-        titleSize = Math.max(18, Math.min(32, width * 0.09))
+        titleSize = Math.max(18, Math.min(32, width * 0.09)) * FS.title
       } else if (selectedSize === "300x600") {
-        titleSize = Math.max(20, Math.min(36, width * 0.11))
+        titleSize = Math.max(20, Math.min(36, width * 0.11)) * FS.title
       } else if (selectedSize === "970x250") {
-        titleSize = Math.max(18, Math.min(32, width * 0.09))
+        titleSize = Math.max(18, Math.min(32, width * 0.09)) * FS.title
       } else {
-        titleSize = Math.max(16, Math.min(28, width * 0.08))
+        titleSize = Math.max(16, Math.min(28, width * 0.08)) * FS.title
       }
 
       // For 970x250 text must not overlap right-side red bar
@@ -1058,13 +1146,13 @@ export default function AdsGenerator() {
         // CTA sizing per format
         let ctaSize: number
         if (selectedSize === "160x600") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.048))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.048)) * FS.cta
         } else if (selectedSize === "300x600") {
-          ctaSize = Math.max(13, Math.min(18.2, width * 0.052))
+          ctaSize = Math.max(13, Math.min(18.2, width * 0.052)) * FS.cta
         } else if (selectedSize === "970x250") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.018))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.018)) * FS.cta
         } else {
-          ctaSize = Math.max(10, Math.min(14, width * 0.04))
+          ctaSize = Math.max(10, Math.min(14, width * 0.04)) * FS.cta
         }
 
         // Frame 1 title (fades in then out)
@@ -1098,8 +1186,7 @@ export default function AdsGenerator() {
           ctaY = height - redBarHeight - padding + ctady
         }
 
-        ctx.fillText(activeCtaText, padding + ctadx, ctaY)
-        const ctaMetrics = ctx.measureText(activeCtaText)
+        const ctaMetrics = drawCta(padding + ctadx, ctaY, width - padding * 2)
         const triangleSize =
           selectedSize === "300x250" || selectedSize === "160x600" ? ctaSize * 0.70875 : ctaSize * 0.675
         drawTriangle(
@@ -1168,13 +1255,13 @@ export default function AdsGenerator() {
         // CTA
         let ctaSize: number
         if (selectedSize === "160x600") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.048))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.048)) * FS.cta
         } else if (selectedSize === "300x600") {
-          ctaSize = Math.max(13, Math.min(18.2, width * 0.052))
+          ctaSize = Math.max(13, Math.min(18.2, width * 0.052)) * FS.cta
         } else if (selectedSize === "970x250") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.018))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.018)) * FS.cta
         } else {
-          ctaSize = Math.max(10, Math.min(14, width * 0.04))
+          ctaSize = Math.max(10, Math.min(14, width * 0.04)) * FS.cta
         }
 
         ctx.font = `500 ${ctaSize}px Graphik, sans-serif`
@@ -1188,8 +1275,7 @@ export default function AdsGenerator() {
           ctaY = titleBottom + 12 + ctady2
         }
 
-        ctx.fillText(activeCtaText, padding + ctadx2, ctaY)
-        const ctaMetrics = ctx.measureText(activeCtaText)
+        const ctaMetrics = drawCta(padding + ctadx2, ctaY, width - padding * 2)
         const triangleSize =
           selectedSize === "300x250" || selectedSize === "160x600" ? ctaSize * 0.70875 : ctaSize * 0.675
         drawTriangle(
@@ -1222,9 +1308,7 @@ export default function AdsGenerator() {
         const titleBottom = titleStartY + titleLines.length * (titleSize + 4)
 
         // Subtitle sizing per format
-        const subtitleSize = selectedSize === "160x600"
-          ? titleSize * 0.9
-          : titleSize * 0.85
+        const subtitleSize = (selectedSize === "160x600" ? titleSize * 0.9 : titleSize * 0.85) * (FS.subtitle / FS.title)
         
         ctx.font = `500 ${subtitleSize}px "Reckless Neue", serif`
         ctx.fillStyle = txt(subtitleProgress)
@@ -1242,13 +1326,13 @@ export default function AdsGenerator() {
         let ctaSize: number
         
         if (selectedSize === "160x600") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.048))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.048)) * FS.cta
         } else if (selectedSize === "300x600") {
-          ctaSize = Math.max(13, Math.min(18.2, width * 0.052))
+          ctaSize = Math.max(13, Math.min(18.2, width * 0.052)) * FS.cta
         } else if (selectedSize === "970x250") {
-          ctaSize = Math.max(12, Math.min(16.8, width * 0.018))
+          ctaSize = Math.max(12, Math.min(16.8, width * 0.018)) * FS.cta
         } else {
-          ctaSize = Math.max(10, Math.min(14, width * 0.04))
+          ctaSize = Math.max(10, Math.min(14, width * 0.04)) * FS.cta
         }
         
         ctx.font = `500 ${ctaSize}px Graphik, sans-serif`
@@ -1270,8 +1354,7 @@ export default function AdsGenerator() {
           ctaY = height - redBarHeight - padding + vstdCtaDy
         }
         
-        ctx.fillText(activeCtaText, padding + vstdCtaDx, ctaY)
-        const ctaMetrics = ctx.measureText(activeCtaText)
+        const ctaMetrics = drawCta(padding + vstdCtaDx, ctaY, width - padding * 2)
         
         // Triangle size adjustment per format
         let triangleSize: number
@@ -1317,7 +1400,8 @@ export default function AdsGenerator() {
           "300x600": { logoH: 34, title: 30, sub: 30, cta: 18, lineGap: 5, gapLogo: 24, gapTitle: 6 },
           "970x250": { logoH: 42, title: 30, sub: 30, cta: 18, lineGap: 5, gapLogo: 16, gapTitle: 4 },
         }
-        const f = cfg[selectedSize]
+        const f0 = cfg[selectedSize]
+        const f = { ...f0, title: f0.title * FS.title, sub: f0.sub * FS.subtitle, cta: f0.cta * FS.cta }
         // 300x250, 160x600 and 728x90 get a 5% larger CTA triangle
         const triangleScale =
           selectedSize === "300x250" || selectedSize === "160x600" || isBanner(selectedSize)
@@ -1392,12 +1476,13 @@ export default function AdsGenerator() {
           const [cdx, cdy] = textSlide(ctaProgress)
           ctx.font = `500 ${f.cta}px Graphik, sans-serif`
           ctx.fillStyle = ctaTxt(ctaProgress)
-          const ctaMetrics = ctx.measureText(activeCtaText)
+          const ctaBox = ctaLayout(activeCtaText, width * 0.4)
+      const ctaMetrics = { width: ctaBox.widest }
           const ctaGroupW = ctaMetrics.width + triangleGap + triangleSize
           const ctaX = width - 20 - ctaGroupW
           const ctaY = height - 20 - f.cta
-          ctx.fillText(activeCtaText, ctaX + cdx, ctaY + cdy)
-          drawTriangle(ctaX + cdx + ctaMetrics.width + triangleGap, ctaY + cdy + f.cta * 0.5, triangleSize, ctaProgress)
+          paintCtaLines(ctaBox, ctaX + cdx, ctaY + cdy, "bottom")
+          drawTriangle(ctaX + cdx + ctaBox.last + triangleGap, ctaY + cdy + f.cta * 0.5, triangleSize, ctaProgress)
         } else {
           // --- Vertical / box sizes: logo (top) and CTA (bottom) are fixed;
           // the copy group is centered in the band between them. ---
@@ -1488,16 +1573,25 @@ export default function AdsGenerator() {
           ctx.font = `500 ${f.cta}px Graphik, sans-serif`
           ctx.fillStyle = ctaTxt(ctaProgress)
           const ctaY = blockBottom - f.cta
-          ctx.fillText(activeCtaText, contentX + cdx, ctaY + cdy)
-          const ctaMetrics = ctx.measureText(activeCtaText)
+          const ctaMetrics = drawCta(contentX + cdx, ctaY + cdy, width - contentX - 20)
           drawTriangle(contentX + cdx + ctaMetrics.width + triangleGap, ctaY + cdy + f.cta * 0.5, triangleSize, ctaProgress)
         }
       }
     }
-  }, [width, height, activeTitle, activeSubtitle, activeEyebrow, activeTitle2, activeCtaText, selectedSize, copyOverrides, shadows, elemTimings, copyLayout, textDirection, layoutType, redBlockExtend, showRedBar, textColor, ctaColor, ctaArrowColor, wordReveal, wrapWidth, duration])
+  }, [width, height, activeTitle, activeSubtitle, activeEyebrow, activeTitle2, activeCtaText, selectedSize, copyOverrides, shadows, elemTimings, copyLayout, textDirection, layoutType, redBlockExtend, showRedBar, textColor, ctaColor, ctaArrowColor, wordReveal, wrapWidth, duration, title, subtitle, eyebrowText, title2, ctaText, variants, activeVariantId, fontScale, animateRedBar])
 
   // Keep ref updated so animation loop always uses latest drawCanvas
-  drawCanvasRef.current = drawCanvas
+  drawAnyRef.current = (p, size, canvas, variantId) => drawCanvas(p, size, canvas, variantId)
+  drawCanvasRef.current = (p: number) => {
+    if (!viewAll) {
+      drawCanvas(p)
+      return
+    }
+    gridCanvasRef.current.forEach((e) => drawCanvas(p, e.size, e.canvas, e.variantId))
+  }
+  useEffect(() => {
+    if (viewAll) requestAnimationFrame(() => drawCanvasRef.current(progressRef.current))
+  }, [viewAll, drawCanvas, variants])
 
   // Animation loop - runs at real-time speed using refs to avoid re-renders
   useEffect(() => {
@@ -1685,6 +1779,26 @@ export default function AdsGenerator() {
             </button>
           </label>
 
+          <label className={`mt-2 flex items-center justify-between gap-2 text-[12px] ${showRedBar ? "cursor-pointer" : "opacity-50"}`}>
+            <span>{layoutType === "red-block" ? "Animate red block" : "Animate red bar"}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={animateRedBar}
+              disabled={!showRedBar}
+              title={showRedBar ? undefined : "Turn the red element on to animate it"}
+              onClick={() => setAnimateRedBar((v) => !v)}
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${animateRedBar ? "bg-primary" : "bg-sidebar-border"}`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-sidebar-foreground transition-transform ${animateRedBar ? "translate-x-4" : "translate-x-0"}`}
+              />
+            </button>
+          </label>
+          {showRedBar && !animateRedBar && (
+            <p className="mt-1 text-[10px] text-muted-foreground">Static — in place from the first frame.</p>
+          )}
+
           <p className="text-[11px] text-muted-foreground mt-4 mb-2">Colours</p>
           <div className="flex flex-col gap-2">
             {[
@@ -1804,6 +1918,13 @@ export default function AdsGenerator() {
                       >
                         Edit crop for {selectedSize}
                       </button>
+                      <button
+                        onClick={autoCropAllFromSelected}
+                        className="w-full py-2 px-3 text-[11px] bg-sidebar-border hover:bg-gray-600 rounded-lg transition-colors text-left"
+                      >
+                        Auto-crop all sizes from {selectedSize}
+                        <span className="mt-0.5 block text-[10px] text-gray-400">Same focal point and zoom, refitted to each shape</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1915,6 +2036,13 @@ export default function AdsGenerator() {
                         className="w-full py-2 px-3 text-[11px] bg-sidebar-border hover:bg-gray-600 rounded-lg transition-colors text-left"
                       >
                         Edit crop for {selectedSize}
+                      </button>
+                      <button
+                        onClick={autoCropAllFromSelected}
+                        className="w-full py-2 px-3 text-[11px] bg-sidebar-border hover:bg-gray-600 rounded-lg transition-colors text-left"
+                      >
+                        Auto-crop all sizes from {selectedSize}
+                        <span className="mt-0.5 block text-[10px] text-gray-400">Same focal point and zoom, refitted to each shape</span>
                       </button>
                     </div>
                   )}
@@ -2091,6 +2219,8 @@ export default function AdsGenerator() {
                 ))}
 
                 <TextMotionPanel
+                  fontScale={fontScale[selectedSize] ?? { title: 100, subtitle: 100, cta: 100 }}
+                  setFontScale={(next) => setFontScale((prev) => ({ ...prev, [selectedSize]: next }))}
                   copyLayout={copyLayout}
                   selectedSize={selectedSize}
                   wordReveal={wordReveal}
@@ -2103,6 +2233,25 @@ export default function AdsGenerator() {
                   timings={elemTimings[selectedSize]}
                   totalFrames={duration * FPS}
                   revealFrames={wordRevealFrames}
+                />
+
+                <VariantsPanel
+                  size={selectedSize}
+                  copyLayout={copyLayout}
+                  variants={sizeVariants}
+                  activeId={activeVariant?.id ?? null}
+                  onAdd={() => {
+                    const id = `v${Date.now().toString(36)}`
+                    const copy = { ...copyFor(selectedSize, activeVariant?.id ?? null) }
+                    setVariants((prev) => [...prev, { id, size: selectedSize, label: `Variant ${sizeVariants.length + 1}`, copy }])
+                    setActiveVariantId(id)
+                  }}
+                  onSelect={setActiveVariantId}
+                  onUpdate={(id, patch) => setVariants((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)))}
+                  onRemove={(id) => {
+                    setVariants((prev) => prev.filter((v) => v.id !== id))
+                    setActiveVariantId(null)
+                  }}
                 />
 
                 {/* Red block size — only relevant for the red block layout */}
@@ -2386,8 +2535,8 @@ export default function AdsGenerator() {
                   <p className="text-[11px] text-gray-400 mb-2">Last GIF export · plays once, rests on the end frame · full quality, for PowerPoint previews</p>
                   <ul className="flex flex-col gap-1">
                     {gifReport.map((r) => (
-                      <li key={r.size} className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="font-mono text-gray-300">{r.size}</span>
+                      <li key={r.size + (r.label ?? "")} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-mono text-gray-300">{r.label ? `${r.size} · ${r.label}` : r.size}</span>
                         <span className="text-gray-400">{r.fps} fps · {r.colors} colours</span>
                         <span className="font-mono tabular-nums text-gray-300">{(r.bytes / 1000).toFixed(1)} KB</span>
                       </li>
@@ -2544,6 +2693,13 @@ export default function AdsGenerator() {
                     ctaColor,
                     ctaArrowColor,
                     sizes: orderedExportSizes,
+                    animateRedBar,
+                    fontScale,
+                    variants: variants.map((v) => ({
+                      size: v.size as AdSize,
+                      label: v.label,
+                      copy: { title: v.copy.title, subtitle: v.copy.subtitle, eyebrow: v.copy.eyebrowText, title2: v.copy.title2, cta: v.copy.ctaText },
+                    })),
                   }).then(setExportReport)
                 }}
                 className="flex-1 flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white py-2 rounded-lg text-[13px] font-medium transition-colors"
@@ -2563,9 +2719,12 @@ export default function AdsGenerator() {
           {(Object.keys(AD_SIZES) as AdSize[]).map((size) => (
             <button
               key={size}
-              onClick={() => setSelectedSize(size)}
+              onClick={() => {
+                setSelectedSize(size)
+                setViewAll(false)
+              }}
               className={`px-4 py-3 text-[13px] transition-colors ${
-                selectedSize === size
+                !viewAll && selectedSize === size
                   ? "border-b-2 border-primary text-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground"
               }`}
@@ -2573,9 +2732,55 @@ export default function AdsGenerator() {
               {size}
             </button>
           ))}
+          <button
+            onClick={() => setViewAll(true)}
+            aria-pressed={viewAll}
+            className={`ml-auto px-4 py-3 text-[13px] transition-colors ${
+              viewAll ? "border-b-2 border-primary text-foreground font-medium" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            All sizes{variants.length > 0 ? ` + ${variants.length} variant${variants.length === 1 ? "" : "s"}` : ""}
+          </button>
         </div>
 
         {/* Canvas Container */}
+        {viewAll ? (
+          <div className="flex-1 overflow-auto bg-muted p-8">
+            <div className="flex flex-wrap items-start gap-8">
+              {[
+                ...(Object.keys(AD_SIZES) as AdSize[]).map((size) => ({ key: size, size, variantId: null as string | null, label: size })),
+                ...variants.map((v) => ({ key: v.id, size: v.size as AdSize, variantId: v.id as string | null, label: `${v.size} · ${v.label}` })),
+              ].map((tile) => {
+                const { width: w, height: h } = AD_SIZES[tile.size]
+                return (
+                  <button
+                    key={tile.key}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSize(tile.size)
+                      setActiveVariantId(tile.variantId)
+                      setViewAll(false)
+                    }}
+                    className="group flex flex-col items-start gap-2 text-left"
+                    aria-label={`Edit ${tile.label}`}
+                  >
+                    <span className="font-mono text-[11px] text-muted-foreground group-hover:text-foreground">{tile.label}</span>
+                    <canvas
+                      ref={(el) => {
+                        if (el) gridCanvasRef.current.set(tile.key, { canvas: el, size: tile.size, variantId: tile.variantId })
+                        else gridCanvasRef.current.delete(tile.key)
+                      }}
+                      width={w * CANVAS_SCALE}
+                      height={h * CANVAS_SCALE}
+                      style={{ width: (w * zoom) / 100, height: (h * zoom) / 100 }}
+                      className="block bg-white shadow-lg ring-primary group-hover:ring-2"
+                    />
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ) : (
         <div className="flex-1 flex items-center justify-center p-8 bg-muted">
           <div
             className="bg-white shadow-lg"
@@ -2593,6 +2798,7 @@ export default function AdsGenerator() {
             />
           </div>
         </div>
+        )}
 
         {/* Playback Controls */}
         <div className="border-t border-border bg-card p-4">
