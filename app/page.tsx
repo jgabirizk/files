@@ -734,7 +734,8 @@ export default function AdsGenerator() {
     const selectedSize = sizeArg ?? currentSize
     const { width, height } = AD_SIZES[selectedSize]
     const { title: activeTitle, subtitle: activeSubtitle, eyebrowText: activeEyebrow, title2: activeTitle2, ctaText: activeCtaText } = copyFor(selectedSize, variantArg ?? null)
-    const fsRaw = fontScale[selectedSize]
+    const variantText = variantArg ? variants.find((x) => x.id === variantArg && x.size === selectedSize)?.text : undefined
+    const fsRaw = variantText?.fontScale ?? fontScale[selectedSize]
     const FS = { title: (fsRaw?.title ?? 100) / 100, subtitle: (fsRaw?.subtitle ?? 100) / 100, cta: (fsRaw?.cta ?? 100) / 100 }
     const padding = AD_PADDING[selectedSize]
     
@@ -860,7 +861,7 @@ export default function AdsGenerator() {
 
     // Helper: wrap text to max width, returns array of lines
     // Enter in a copy field forces a break; the wrap-width slider narrows the column.
-    const sizeWrap: { title: number; subtitle: number; cta?: number } = wrapWidth[selectedSize] || { title: 100, subtitle: 100 }
+    const sizeWrap: { title: number; subtitle: number; cta?: number } = variantText?.wrap ?? wrapWidth[selectedSize] ?? { title: 100, subtitle: 100 }
     const wrapText = (text: string, maxWidth: number, key: "title" | "subtitle" = "title"): string[] => {
       const limit = maxWidth * (sizeWrap[key] / 100)
       const lines: string[] = []
@@ -2219,14 +2220,32 @@ export default function AdsGenerator() {
                 ))}
 
                 <TextMotionPanel
-                  fontScale={fontScale[selectedSize] ?? { title: 100, subtitle: 100, cta: 100 }}
-                  setFontScale={(next) => setFontScale((prev) => ({ ...prev, [selectedSize]: next }))}
+                  fontScale={activeVariant?.text?.fontScale ?? fontScale[selectedSize] ?? { title: 100, subtitle: 100, cta: 100 }}
+                  setFontScale={(next) =>
+                    activeVariant
+                      ? setVariants((prev) => prev.map((v) => (v.id === activeVariant.id ? { ...v, text: { ...v.text, fontScale: next } } : v)))
+                      : setFontScale((prev) => ({ ...prev, [selectedSize]: next }))
+                  }
+                  scope={activeVariant ? `${selectedSize} · ${activeVariant.label}` : undefined}
+                  inherited={activeVariant ? { fontScale: !activeVariant.text?.fontScale, wrap: !activeVariant.text?.wrap } : undefined}
+                  onReset={
+                    activeVariant
+                      ? (which) =>
+                          setVariants((prev) =>
+                            prev.map((v) => (v.id === activeVariant.id ? { ...v, text: { ...v.text, [which]: undefined } } : v)),
+                          )
+                      : undefined
+                  }
                   copyLayout={copyLayout}
                   selectedSize={selectedSize}
                   wordReveal={wordReveal}
                   setWordReveal={setWordReveal}
-                  wrap={wrapWidth[selectedSize] || { title: 100, subtitle: 100 }}
-                  setWrap={(next) => setWrapWidth((prev) => ({ ...prev, [selectedSize]: next }))}
+                  wrap={activeVariant?.text?.wrap ?? wrapWidth[selectedSize] ?? { title: 100, subtitle: 100 }}
+                  setWrap={(next) =>
+                    activeVariant
+                      ? setVariants((prev) => prev.map((v) => (v.id === activeVariant.id ? { ...v, text: { ...v.text, wrap: next } } : v)))
+                      : setWrapWidth((prev) => ({ ...prev, [selectedSize]: next }))
+                  }
                   headline={activeTitle}
                   headline2={copyLayout === "two-frame" ? activeTitle2 : ""}
                   body={activeSubtitle}
@@ -2699,6 +2718,8 @@ export default function AdsGenerator() {
                       size: v.size as AdSize,
                       label: v.label,
                       copy: { title: v.copy.title, subtitle: v.copy.subtitle, eyebrow: v.copy.eyebrowText, title2: v.copy.title2, cta: v.copy.ctaText },
+                      wrap: v.text?.wrap,
+                      fontScale: v.text?.fontScale,
                     })),
                   }).then(setExportReport)
                 }}

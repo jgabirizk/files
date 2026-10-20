@@ -128,7 +128,14 @@ const MIN_QUALITY = 0.35
 
 export type FontScale = { title: number; subtitle: number; cta: number }
 export type VariantCopy = { title: string; subtitle: string; eyebrow: string; title2: string; cta: string }
-export type ExportVariant = { size: AdSize; label: string; copy: VariantCopy }
+export type ExportVariant = {
+  size: AdSize
+  label: string
+  copy: VariantCopy
+  /** Absent = the variant follows its size's own wrap / font size. */
+  wrap?: { title: number; subtitle: number; cta?: number }
+  fontScale?: FontScale
+}
 
 const fontScaleFor = (config: ExportConfig, size: AdSize) => {
   const f = config.fontScale?.[size]
@@ -930,7 +937,12 @@ export async function exportAllSizes(config: ExportConfig): Promise<ExportReport
     ...sizes.map((size) => ({ size, label: undefined as string | undefined, cfg: base })),
     ...(base.variants || [])
       .filter((v) => sizes.includes(v.size))
-      .map((v) => ({ size: v.size, label: v.label, cfg: { ...base, copyOverrides: { ...base.copyOverrides, [v.size]: v.copy } } })),
+      .map((v) => ({ size: v.size, label: v.label, cfg: {
+          ...base,
+          copyOverrides: { ...base.copyOverrides, [v.size]: v.copy },
+          wrapWidth: v.wrap ? { ...base.wrapWidth, [v.size]: v.wrap } : base.wrapWidth,
+          fontScale: v.fontScale ? { ...base.fontScale, [v.size]: v.fontScale } : base.fontScale,
+        } })),
   ]
   for (const job of jobs) {
     const { size, label } = job

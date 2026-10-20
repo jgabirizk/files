@@ -3,7 +3,11 @@
 import { Plus, Trash2 } from "lucide-react"
 
 export type VariantCopy = { title: string; subtitle: string; eyebrowText: string; title2: string; ctaText: string }
-export type AdVariant = { id: string; size: string; label: string; copy: VariantCopy }
+export type VariantWrap = { title: number; subtitle: number; cta?: number }
+export type VariantFontScale = { title: number; subtitle: number; cta: number }
+// Absent fields mean "follow this size's own setting", so a variant only diverges where someone changed it.
+export type VariantText = { wrap?: VariantWrap; fontScale?: VariantFontScale }
+export type AdVariant = { id: string; size: string; label: string; copy: VariantCopy; text?: VariantText }
 
 interface Props {
   size: string

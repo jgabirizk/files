@@ -21,6 +21,12 @@ interface Props {
   timings: { title: Span; title2?: Span; subtitle: Span } | undefined
   totalFrames: number
   revealFrames: (words: number) => number
+  /** Names what the font/wrap controls are editing, e.g. "300x250 · Variant 2". Defaults to the size. */
+  scope?: string
+  /** For a variant: which settings still follow the size rather than being its own. */
+  inherited?: { fontScale: boolean; wrap: boolean }
+  /** For a variant, Reset returns a setting to following the size instead of writing 100%. */
+  onReset?: (which: "fontScale" | "wrap") => void
 }
 
 const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length
@@ -40,7 +46,11 @@ export function TextMotionPanel({
   timings,
   totalFrames,
   revealFrames,
+  scope,
+  inherited,
+  onReset,
 }: Props) {
+  const label = scope ?? selectedSize
   const hasBody = copyLayout === "standard"
   // A body choice made under Standard has nothing to animate in the other layouts.
   const effective: WordReveal = wordReveal === "subtitle" && !hasBody ? "none" : wordReveal
@@ -126,11 +136,14 @@ export function TextMotionPanel({
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] text-gray-400">Font size · {selectedSize}</span>
-          {(fontScale.title !== 100 || fontScale.subtitle !== 100 || fontScale.cta !== 100) && (
+          <span className="text-[11px] text-gray-400">
+            Font size · {label}
+            {inherited?.fontScale && <span className="text-gray-500"> · following {selectedSize}</span>}
+          </span>
+          {(onReset ? !inherited?.fontScale : fontScale.title !== 100 || fontScale.subtitle !== 100 || fontScale.cta !== 100) && (
             <button
               type="button"
-              onClick={() => setFontScale({ title: 100, subtitle: 100, cta: 100 })}
+              onClick={() => (onReset ? onReset("fontScale") : setFontScale({ title: 100, subtitle: 100, cta: 100 }))}
               className="text-[10px] text-gray-400 underline-offset-2 hover:text-white hover:underline"
             >
               Reset
@@ -170,11 +183,14 @@ export function TextMotionPanel({
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] text-gray-400">Text wrap · {selectedSize}</span>
-          {(wrap.title !== 100 || wrap.subtitle !== 100 || wrap.cta !== undefined) && (
+          <span className="text-[11px] text-gray-400">
+            Text wrap · {label}
+            {inherited?.wrap && <span className="text-gray-500"> · following {selectedSize}</span>}
+          </span>
+          {(onReset ? !inherited?.wrap : wrap.title !== 100 || wrap.subtitle !== 100 || wrap.cta !== undefined) && (
             <button
               type="button"
-              onClick={() => setWrap({ title: 100, subtitle: 100 })}
+              onClick={() => (onReset ? onReset("wrap") : setWrap({ title: 100, subtitle: 100 }))}
               className="text-[10px] text-gray-400 underline-offset-2 hover:text-white hover:underline"
             >
               Reset
