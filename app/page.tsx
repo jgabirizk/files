@@ -8,6 +8,7 @@ import JSZip from "jszip"
 type GifReportRow = { size: string; label?: string; bytes: number; fps: number; colors: number }
 import { TextMotionPanel } from "@/components/text-motion-panel"
 import { VariantsPanel, type AdVariant, type VariantCopy } from "@/components/variants-panel"
+import { CopyTextarea, type CopyBoxAlign } from "@/components/copy-textarea"
 import { proportionalCrop } from "@/lib/auto-crop"
 import { breakWidth, CANVAS_SCALE } from "@/lib/text-metrics"
 import { easeStandard, easeEntrance, easeExit, TEXT_SLIDE_PX, nearestToken, MAX_MOVE_FRAMES, FPS, WORD_ENTRANCE_FRAMES, WORD_STAGGER_FRAMES, wordRevealFrames, type WordReveal } from "@/lib/motion"
@@ -262,6 +263,7 @@ export default function AdsGenerator() {
   const [fontScale, setFontScale] = useState<Partial<Record<AdSize, FontScale>>>({})
   const [variants, setVariants] = useState<AdVariant[]>([])
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null)
+  const [copyBoxAlign, setCopyBoxAlign] = useState<CopyBoxAlign>("top")
   const [viewAll, setViewAll] = useState(false)
   // Canvases in the all-sizes grid, keyed by size or variant id
   const gridCanvasRef = useRef(new Map<string, { canvas: HTMLCanvasElement; size: AdSize; variantId: string | null }>())
@@ -2198,15 +2200,37 @@ export default function AdsGenerator() {
                   </div>
                 )}
 
+                <div className="flex items-center justify-between">
+                  <span id="copy-box-align-label" className="text-[11px] text-gray-400">Text in boxes</span>
+                  <div role="radiogroup" aria-labelledby="copy-box-align-label" className="flex rounded-md bg-sidebar-border p-0.5">
+                    {(["top", "middle"] as const).map((a) => (
+                      <button
+                        key={a}
+                        type="button"
+                        role="radio"
+                        aria-checked={copyBoxAlign === a}
+                        onClick={() => setCopyBoxAlign(a)}
+                        className={`rounded px-2.5 py-1 text-[11px] capitalize transition-colors ${
+                          copyBoxAlign === a ? "bg-white text-black" : "text-gray-400 hover:text-white"
+                        }`}
+                      >
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {fields.map(({ key, label, value }) => (
                   <div key={key}>
                     <label className="block text-[11px] text-gray-400 mb-2">{label}</label>
                     {key === "title" || key === "title2" || key === "subtitle" ? (
-                      <textarea
+                      <CopyTextarea
                         rows={2}
+                        align={copyBoxAlign}
+                        lineHeight={1.375}
                         value={value}
-                        onChange={(e) => isSynced ? setGlobalField(key, e.target.value) : setOverrideField(key, e.target.value)}
-                        className={`w-full resize-y bg-sidebar-border border-0 rounded-lg px-3 py-2 text-[13px] leading-snug focus:outline-none focus:ring-1 focus:ring-primary ${!isSynced ? "ring-1 ring-amber-500/40" : ""}`}
+                        onChange={(v) => isSynced ? setGlobalField(key, v) : setOverrideField(key, v)}
+                        boxClassName={`bg-sidebar-border rounded-lg px-3 py-2 text-[13px] focus-within:ring-1 focus-within:ring-primary ${!isSynced ? "ring-1 ring-amber-500/40" : ""}`}
                       />
                     ) : (
                       <input
@@ -2255,6 +2279,7 @@ export default function AdsGenerator() {
                 />
 
                 <VariantsPanel
+                  boxAlign={copyBoxAlign}
                   size={selectedSize}
                   copyLayout={copyLayout}
                   variants={sizeVariants}

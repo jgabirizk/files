@@ -1,6 +1,7 @@
 "use client"
 
 import { Plus, Trash2 } from "lucide-react"
+import { CopyTextarea, type CopyBoxAlign } from "@/components/copy-textarea"
 
 export type VariantCopy = { title: string; subtitle: string; eyebrowText: string; title2: string; ctaText: string }
 export type VariantWrap = { title: number; subtitle: number; cta?: number }
@@ -18,12 +19,13 @@ interface Props {
   onSelect: (id: string | null) => void
   onUpdate: (id: string, patch: Partial<Omit<AdVariant, "id" | "size">>) => void
   onRemove: (id: string) => void
+  boxAlign: CopyBoxAlign
 }
 
 const field =
   "w-full resize-none rounded-md border border-sidebar-border bg-sidebar px-2 py-1.5 text-[12px] text-sidebar-foreground focus:border-primary focus:outline-none"
 
-export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onSelect, onUpdate, onRemove }: Props) {
+export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onSelect, onUpdate, onRemove, boxAlign }: Props) {
   const active = variants.find((v) => v.id === activeId) ?? null
   const fields: { key: keyof VariantCopy; label: string; rows: number }[] = [
     ...(copyLayout === "eyebrow" ? [{ key: "eyebrowText" as const, label: "Eyebrow", rows: 1 }] : []),
@@ -95,12 +97,14 @@ export function VariantsPanel({ size, copyLayout, variants, activeId, onAdd, onS
               <label htmlFor={`variant-${f.key}`} className="mb-1 block text-[11px] text-gray-400">
                 {f.label}
               </label>
-              <textarea
+              <CopyTextarea
                 id={`variant-${f.key}`}
                 rows={f.rows}
+                align={boxAlign}
+                lineHeight={1.5}
                 value={active.copy[f.key]}
-                onChange={(e) => onUpdate(active.id, { copy: { ...active.copy, [f.key]: e.target.value } })}
-                className={field}
+                onChange={(value) => onUpdate(active.id, { copy: { ...active.copy, [f.key]: value } })}
+                boxClassName="rounded-md border border-sidebar-border bg-sidebar px-2 py-1.5 text-[12px] text-sidebar-foreground focus-within:border-primary"
               />
             </div>
           ))}
