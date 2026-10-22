@@ -49,6 +49,7 @@ const AD_SIZES = {
   "728x90": { width: 728, height: 90 },
   "300x600": { width: 300, height: 600 },
   "320x50": { width: 320, height: 50 },
+  "320x100": { width: 320, height: 100 },
 } as const
 
 // Padding for each ad size
@@ -59,6 +60,7 @@ const AD_PADDING = {
   "970x250": 40,
   "728x90": 20,
   "320x50": 10,
+  "320x100": 14,
 } as const
 
 type AdSize = keyof typeof AD_SIZES
@@ -71,11 +73,17 @@ const RED_BLOCK_BASE: Record<AdSize, { x: number; y: number; w: number; h: numbe
   "300x600": { x: 20, y: 20, w: 260, h: 280, pad: 20, axis: "h", maxExtend: 280 },
   "970x250": { x: 20, y: 20, w: 465, h: 210, pad: 20, axis: "w", maxExtend: 465 },
   "320x50": { x: 5, y: 5, w: 190, h: 40, pad: 8, axis: "w", maxExtend: 80 },
+  "320x100": { x: 8, y: 8, w: 200, h: 84, pad: 12, axis: "w", maxExtend: 80 },
 }
 
-// Horizontal banners (728x90, 320x50) share one layout, sized off the ad height.
-const isBanner = (size: AdSize) => size === "728x90" || size === "320x50"
-const bannerBarH = (size: AdSize) => (size === "320x50" ? 6 : 10)
+// Horizontal banners (728x90, 320x50, 320x100) share one layout, sized off the ad height.
+const isBanner = (size: AdSize) => size === "728x90" || size === "320x50" || size === "320x100"
+const bannerBarH = (size: AdSize) => (size === "320x50" ? 6 : size === "320x100" ? 8 : 10)
+// 320x100 is only 3.2:1, so the Red Bar banner's height ratios (tuned for 6:1+ banners) would draw a
+// logo too wide to leave a headline column. It uses fixed sizes instead; lib/export-ads.ts holds the same table.
+const FIXED_BANNER: Partial<Record<AdSize, { logo: number; title: number; sub: number; eyebrow: number; cta: number }>> = {
+  "320x100": { logo: 20, title: 15, sub: 13, eyebrow: 11, cta: 9 },
+}
 
 const hexToRgba = (hex: string, alpha: number) => {
   const h = hex.replace("#", "")
@@ -197,6 +205,7 @@ export default function AdsGenerator() {
     "970x250": { ...DEFAULT_SHADOW },
     "728x90":  { ...DEFAULT_SHADOW },
     "320x50":  { ...DEFAULT_SHADOW },
+    "320x100":  { ...DEFAULT_SHADOW },
     "300x600": { ...DEFAULT_SHADOW },
   })
   const [bgAnimation, setBgAnimation] = useState<BgAnimationType>("zoom-out")
@@ -209,6 +218,7 @@ export default function AdsGenerator() {
     "970x250": { ...DEFAULT_TIMING },
     "728x90":  { ...DEFAULT_TIMING },
     "320x50":  { ...DEFAULT_TIMING },
+    "320x100":  { ...DEFAULT_TIMING },
     "300x600": { ...DEFAULT_TIMING },
   })
   // offsetX/offsetY are pixel offsets of the image top-left corner in the crop container (always <= 0)
@@ -218,6 +228,7 @@ export default function AdsGenerator() {
     "970x250": { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "728x90":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "320x50":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
+    "320x100":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "300x600": { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
   })
 
@@ -227,6 +238,7 @@ export default function AdsGenerator() {
     "970x250": { offsetX: 0, offsetY: 0, scale: 1 },
     "728x90":  { offsetX: 0, offsetY: 0, scale: 1 },
     "320x50":  { offsetX: 0, offsetY: 0, scale: 1 },
+    "320x100":  { offsetX: 0, offsetY: 0, scale: 1 },
     "300x600": { offsetX: 0, offsetY: 0, scale: 1 },
   })
   const [cropModalOpen, setCropModalOpen] = useState(false)
@@ -300,6 +312,7 @@ export default function AdsGenerator() {
     "970x250": 0,
     "728x90": 0,
     "320x50": 0,
+    "320x100": 0,
     "300x600": 0,
   })
 
@@ -326,6 +339,7 @@ export default function AdsGenerator() {
       "970x250": { ...DEFAULT_SHADOW },
       "728x90":  { ...DEFAULT_SHADOW },
       "320x50":  { ...DEFAULT_SHADOW },
+      "320x100":  { ...DEFAULT_SHADOW },
       "300x600": { ...DEFAULT_SHADOW },
     })
     setElemTimings({
@@ -334,6 +348,7 @@ export default function AdsGenerator() {
       "970x250": { ...DEFAULT_TIMING },
       "728x90":  { ...DEFAULT_TIMING },
       "320x50":  { ...DEFAULT_TIMING },
+      "320x100":  { ...DEFAULT_TIMING },
       "300x600": { ...DEFAULT_TIMING },
     })
     setCopyOverrides({
@@ -342,6 +357,7 @@ export default function AdsGenerator() {
     "970x250": { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "728x90":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "320x50":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
+    "320x100":  { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     "300x600": { synced: true, title: "Lorem ipsum sit amet", subtitle: "Lorem ipsum dolor amet", eyebrowText: "Event Name", title2: "Donec augue mauris", ctaText: "GET THE REPORT" },
     })
     setCrops({
@@ -350,6 +366,7 @@ export default function AdsGenerator() {
       "970x250": { offsetX: 0, offsetY: 0, scale: 1 },
       "728x90":  { offsetX: 0, offsetY: 0, scale: 1 },
       "320x50":  { offsetX: 0, offsetY: 0, scale: 1 },
+      "320x100":  { offsetX: 0, offsetY: 0, scale: 1 },
       "300x600": { offsetX: 0, offsetY: 0, scale: 1 },
     })
     layerImagesRef.current = new Map()
@@ -557,6 +574,7 @@ export default function AdsGenerator() {
       "970x250": { ...timingDefaults },
       "728x90":  { ...timingDefaults },
       "320x50":  { ...timingDefaults },
+      "320x100":  { ...timingDefaults },
       "300x600": { ...timingDefaults },
     })
   }, [copyLayout])
@@ -1045,7 +1063,8 @@ export default function AdsGenerator() {
 
     if (isBanner(selectedSize)) {
       // --- 728x90: horizontal layout ---
-      const logoH = (height - padding * 2) * 0.595
+      const FIXED = FIXED_BANNER[selectedSize]
+      const logoH = FIXED ? FIXED.logo : (height - padding * 2) * 0.595
       const logoW = logoH * (120 / 36.45)
       const logoY = (height - logoH) / 2 // Vertically centered on full artboard
       if (logoImageRef.current) {
@@ -1053,7 +1072,7 @@ export default function AdsGenerator() {
       }
 
       // Reserve space for CTA on the right before drawing title
-      const ctaFontSize = Math.round(height * 0.15 * FS.cta)
+      const ctaFontSize = FIXED ? FIXED.cta * FS.cta : Math.round(height * 0.15 * FS.cta)
       ctx.font = `500 ${ctaFontSize}px Graphik, sans-serif`
       const ctaBox = ctaLayout(activeCtaText, width * 0.34)
       const ctaMetrics = { width: ctaBox.widest }
@@ -1078,7 +1097,7 @@ export default function AdsGenerator() {
 
       if (layout === "two-frame") {
         // --- 728x90 TWO-FRAME LAYOUT ---
-        const titleSize = Math.round(height * 0.26 * FS.title)
+        const titleSize = FIXED ? FIXED.title * FS.title : Math.round(height * 0.26 * FS.title)
 
         // Vertically center a single line of text above the red bar
         const availableH = height - redBarHeight
@@ -1098,8 +1117,8 @@ export default function AdsGenerator() {
 
       } else if (layout === "eyebrow") {
         // --- 728x90 EYEBROW LAYOUT ---
-        const titleSize = Math.round(height * 0.26 * FS.title)
-        const eyebrowSize = Math.round(height * 0.18 * FS.title)
+        const titleSize = FIXED ? FIXED.title * FS.title : Math.round(height * 0.26 * FS.title)
+        const eyebrowSize = FIXED ? FIXED.eyebrow * FS.title : Math.round(height * 0.18 * FS.title)
         const eyebrowPadH = eyebrowSize * 0.2
         const eyebrowPadV = eyebrowSize * 0.1
         const eyebrowBlockH = eyebrowSize + eyebrowPadV * 2
@@ -1134,8 +1153,8 @@ export default function AdsGenerator() {
         // --- 728x90 STANDARD LAYOUT ---
         // Measured before drawing so the headline + subtitle block can be
         // centred above the red bar, matching the two-frame and eyebrow layouts.
-        const titleSize = Math.round(height * 0.26 * FS.title)
-        const subtitleSize = Math.round(height * 0.21 * FS.subtitle)
+        const titleSize = FIXED ? FIXED.title * FS.title : Math.round(height * 0.26 * FS.title)
+        const subtitleSize = FIXED ? FIXED.sub * FS.subtitle : Math.round(height * 0.21 * FS.subtitle)
         ctx.font = `500 ${subtitleSize}px "Reckless Neue", serif`
         const subtitleLines = wrapText(activeSubtitle, maxTextWidth, "subtitle")
         const subtitleCount = subtitleLines.filter((l) => l.trim()).length
@@ -1505,6 +1524,7 @@ export default function AdsGenerator() {
           "160x600": { logoH: 26, title: 20, sub: 20, cta: 12, lineGap: 4, gapLogo: 16, gapTitle: 6 },
           "728x90": { logoH: 27, title: 20, sub: 20, cta: 12, lineGap: 2, gapLogo: 14, gapTitle: 4 },
           "320x50": { logoH: 18, title: 13, sub: 12, cta: 8, lineGap: 1, gapLogo: 8, gapTitle: 2 },
+          "320x100": { logoH: 20, title: 15, sub: 13, cta: 9, lineGap: 2, gapLogo: 10, gapTitle: 3 },
           "300x600": { logoH: 34, title: 30, sub: 30, cta: 18, lineGap: 5, gapLogo: 24, gapTitle: 6 },
           "970x250": { logoH: 42, title: 30, sub: 30, cta: 18, lineGap: 5, gapLogo: 16, gapTitle: 4 },
         }
@@ -3225,6 +3245,7 @@ export default function AdsGenerator() {
                         "970x250": { ...DEFAULT_TIMING },
                         "728x90":  { ...DEFAULT_TIMING },
                         "320x50":  { ...DEFAULT_TIMING },
+                        "320x100":  { ...DEFAULT_TIMING },
                         "300x600": { ...DEFAULT_TIMING },
                       })
                     } else {

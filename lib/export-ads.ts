@@ -4,10 +4,10 @@ import { buildTiming, splitBuild } from "./build-lines"
 import { buildGlyphTable, installOutlines, type GlyphTable } from "./glyph-outlines"
 import { makeBezier, CURVES, TEXT_SLIDE_PX, FPS, WORD_ENTRANCE_FRAMES, WORD_STAGGER_FRAMES, type WordReveal } from "./motion"
 
-export type AdSize = "300x250" | "160x600" | "300x600" | "970x250" | "728x90" | "320x50"
-export const ALL_AD_SIZES: AdSize[] = ["300x250", "160x600", "300x600", "970x250", "728x90", "320x50"]
-const isBanner = (size: AdSize) => size === "728x90" || size === "320x50"
-const bannerBarH = (size: AdSize) => (size === "320x50" ? 6 : 10)
+export type AdSize = "300x250" | "160x600" | "300x600" | "970x250" | "728x90" | "320x50" | "320x100"
+export const ALL_AD_SIZES: AdSize[] = ["300x250", "160x600", "300x600", "970x250", "728x90", "320x50", "320x100"]
+const isBanner = (size: AdSize) => size === "728x90" || size === "320x50" || size === "320x100"
+const bannerBarH = (size: AdSize) => (size === "320x50" ? 6 : size === "320x100" ? 8 : 10)
 
 const AD_SIZES = {
   "300x250": { width: 300, height: 250 },
@@ -16,6 +16,7 @@ const AD_SIZES = {
   "970x250": { width: 970, height: 250 },
   "728x90":  { width: 728, height: 90  },
   "320x50":  { width: 320, height: 50  },
+  "320x100":  { width: 320, height: 100 },
 } as const
 
 // Exact padding values from page.tsx
@@ -26,6 +27,7 @@ const AD_PADDING: Record<AdSize, number> = {
   "970x250": 40,
   "728x90": 20,
   "320x50": 10,
+  "320x100": 14,
 }
 
 // Modal sizes for crop calculation (exact from page.tsx)
@@ -356,7 +358,7 @@ function generateAnimationJS(
   })))
 
   const sizeSpecificCode = isBanner(size) 
-    ? generate728x90Code(config) 
+    ? generate728x90Code(config, size) 
     : generateVerticalCode(size, config)
 
   return `(function(){
@@ -690,16 +692,23 @@ requestAnimationFrame(function() {
 })();`
 }
 
-function generate728x90Code(config: ExportConfig): string {
+// 320x100 is only 3.2:1, so the height ratios below (tuned for 6:1+ banners) give a logo too wide to
+// leave a headline column. Same fixed table as FIXED_BANNER in app/page.tsx's Red Bar banner branch.
+const FIXED_BANNER: Partial<Record<AdSize, { logo: number; title: number; sub: number; eyebrow: number; cta: number }>> = {
+  "320x100": { logo: 20, title: 15, sub: 13, eyebrow: 11, cta: 9 },
+}
+
+function generate728x90Code(config: ExportConfig, size: AdSize): string {
   return `
+    var FIXED = ${JSON.stringify(FIXED_BANNER[size] ?? null)};
     // Sized off the full height, exactly as the editor does. The headline column starts after the logo,
     // so a smaller logo here would widen the column and break the headline differently from the preview.
-    var logoH = (H - pad * 2) * 0.595;
+    var logoH = FIXED ? FIXED.logo : (H - pad * 2) * 0.595;
     var logoW = logoH * (120 / 36.45);
     var logoY = (H - logoH) / 2;
     if (logoImg.complete) ctx.drawImage(logoImg, pad, logoY, logoW, logoH);
     
-    var ctaFontSize = Math.round(H * 0.15 * FS.cta);
+    var ctaFontSize = FIXED ? FIXED.cta * FS.cta : Math.round(H * 0.15 * FS.cta);
     ctx.font = "500 " + ctaFontSize + "px Graphik, sans-serif";
     var ctaBox = ctaLayout(ctaText, W * 0.34);
     var ctaMetrics = { width: ctaBox.widest };
@@ -718,7 +727,7 @@ function generate728x90Code(config: ExportConfig): string {
     var frame2Alpha = title2Progress728;
     
     if (copyLayout === "two-frame") {
-      var titleSize = Math.round(H * 0.26 * FS.title);
+      var titleSize = FIXED ? FIXED.title * FS.title : Math.round(H * 0.26 * FS.title);
       var availableH = H - redBarHeight;
       var textY = (availableH - titleSize) / 2;
       
@@ -732,8 +741,8 @@ function generate728x90Code(config: ExportConfig): string {
       drawCopyLine("title2", [title2], 0, title2, textX + t2slide[0], textY + t2slide[1]);
       
     } else if (copyLayout === "eyebrow") {
-      var titleSize = Math.round(H * 0.26 * FS.title);
-      var eyebrowSize = Math.round(H * 0.18);
+      var titleSize = FIXED ? FIXED.title * FS.title : Math.round(H * 0.26 * FS.title);
+      var eyebrowSize = FIXED ? FIXED.eyebrow : Math.round(H * 0.18);
       var eyebrowPadH = eyebrowSize * 0.2;
       var eyebrowPadV = eyebrowSize * 0.1;
       var eyebrowBlockH = eyebrowSize + eyebrowPadV * 2;
@@ -764,8 +773,8 @@ function generate728x90Code(config: ExportConfig): string {
       }
       
     } else {
-      var titleSize = Math.round(H * 0.26 * FS.title);
-      var subtitleSize = Math.round(H * 0.21 * FS.subtitle);
+      var titleSize = FIXED ? FIXED.title * FS.title : Math.round(H * 0.26 * FS.title);
+      var subtitleSize = FIXED ? FIXED.sub * FS.subtitle : Math.round(H * 0.21 * FS.subtitle);
       ctx.font = '500 ' + subtitleSize + 'px "Reckless Neue", serif';
       var subtitleLines = wrapText(subtitle, maxTextWidth, "subtitle");
       var subtitleCount = subtitleLines.filter(function (l) { return l.trim(); }).length;
